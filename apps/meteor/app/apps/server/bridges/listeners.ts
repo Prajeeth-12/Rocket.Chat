@@ -7,6 +7,7 @@ import type { IPreEmailSentContext } from '@rocket.chat/apps-engine/definition/e
 import type { IExternalComponent } from '@rocket.chat/apps-engine/definition/externalComponent';
 import { LivechatTransferEventType } from '@rocket.chat/apps-engine/definition/livechat';
 import { isLivechatRoom } from '@rocket.chat/apps-engine/definition/livechat/ILivechatRoom';
+import type { MediaCallEvent } from '@rocket.chat/apps-engine/definition/mediaCalls';
 import { AppInterface } from '@rocket.chat/apps-engine/definition/metadata';
 import type { UIKitIncomingInteraction } from '@rocket.chat/apps-engine/definition/uikit';
 import type { IUIKitLivechatIncomingInteraction } from '@rocket.chat/apps-engine/definition/uikit/livechat';
@@ -167,6 +168,12 @@ type HandleDefaultEvent =
 	| {
 			event: AppInterface.IPreEmailSent;
 			payload: [IPreEmailSentContext];
+	  }
+	// Media call payloads are already app-shaped when they get here — see
+	// apps/meteor/server/services/media-call/appEvents.ts
+	| {
+			event: AppInterface.IMediaCallHandler;
+			payload: [MediaCallEvent];
 	  };
 
 type HandleFileUploadEvent = {

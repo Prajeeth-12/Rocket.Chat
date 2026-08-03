@@ -1,0 +1,183 @@
+import { AppEvents, Apps } from '@rocket.chat/apps';
+import type {
+	IMediaCall as IAppsMediaCall,
+	IMediaCallActor as IAppsMediaCallActor,
+	IMediaCallContact as IAppsMediaCallContact,
+	IPreMediaCallCreatedContext,
+	MediaCallEvent,
+	PreMediaCallCreatedOutcome,
+} from '@rocket.chat/apps-engine/definition/mediaCalls';
+import { AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
+import type { IMediaCall, MediaCallActor, MediaCallContact, ServerActor } from '@rocket.chat/core-typings';
+import type { PreCallCreatedHookParams, PreCallCreatedHookResult } from '@rocket.chat/media-calls';
+import { callFeatureList, type CallFeature } from '@rocket.chat/media-signaling';
+import { MediaCalls } from '@rocket.chat/models';
+
+import { logger } from './logger';
+
+/**
+ * Maps media calls onto the shapes apps see and dispatches the media-call
+ * lifecycle events to the Apps-Engine.
+ *
+ * Every event travels under the single `IMediaCallHandler` interface; the
+ * `method` on the envelope is what tells the listener manager which of the
+ * handler's optional methods to call.
+ */
+
+/** Contacts carry a per-session signing token, which is a credential: only these fields may reach an app. */
+function toAppContact(contact: MediaCallContact): IAppsMediaCallContact {
+	return {
+		type: contact.type,
+		id: contact.id,
+		...(contact.username && { username: contact.username }),
+		...(contact.displayName && { displayName: contact.displayName }),
+		...(contact.sipExtension && { sipExtension: contact.sipExtension }),
+	};
+}
+
+function toAppActor(actor: MediaCallActor | ServerActor): IAppsMediaCallActor {
+	return {
+		type: actor.type,
+		id: actor.id,
+	};
+}
+
+function toAppMediaCall(call: IMediaCall): IAppsMediaCall {
+	return {
+		id: call._id,
+		service: call.service,
+		kind: call.kind,
+		state: call.state,
+		createdBy: toAppContact(call.createdBy),
+		createdAt: call.createdAt,
+		caller: toAppContact(call.caller),
+		callee: toAppContact(call.callee),
+		features: call.features,
+		uids: call.uids,
+		ended: call.ended,
+		...(call.endedAt && { endedAt: call.endedAt }),
+		...(call.endedBy && { endedBy: toAppActor(call.endedBy) }),
+		...(call.hangupReason && { hangupReason: call.hangupReason }),
+		...(call.acceptedAt && { acceptedAt: call.acceptedAt }),
+		...(call.activatedAt && { activatedAt: call.activatedAt }),
+		...(call.parentCallId && { parentCallId: call.parentCallId }),
+	};
+}
+
+function getCallDurationInMs(call: IMediaCall): number {
+	const { activatedAt, endedAt } = call;
+	if (!activatedAt) {
+		return 0;
+	}
+
+	return Math.max(0, (endedAt?.valueOf() ?? Date.now()) - activatedAt.valueOf());
+}
+
+function isCallFeature(feature: string): feature is CallFeature {
+	return (callFeatureList as readonly string[]).includes(feature);
+}
+
+async function triggerMediaCallEvent(event: MediaCallEvent): Promise<unknown> {
+	return Apps.self?.triggerEvent(AppEvents.IMediaCallHandler, event);
+}
+
+/**
+ * Loads a call and dispatches one of the post events for it. Post events are
+ * observational, so a call that can no longer be loaded is not an error worth
+ * disrupting anything over.
+ */
+async function triggerPostMediaCallEvent(
+	callId: IMediaCall['_id'],
+	getEvent: (call: IMediaCall) => Exclude<MediaCallEvent, { method: AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED }>,
+): Promise<void> {
+	if (!Apps.self) {
+		return;
+	}
+
+	const call = await MediaCalls.findOneById(callId);
+	if (!call) {
+		logger.warn({ msg: 'Unable to notify apps about a call that no longer exists', callId });
+		return;
+	}
+
+	await triggerMediaCallEvent(getEvent(call));
+}
+
+export async function notifyAppsOfMediaCallStarted(callId: IMediaCall['_id']): Promise<void> {
+	return triggerPostMediaCallEvent(callId, (call) => ({
+		method: AppMethod.EXECUTE_POST_MEDIA_CALL_STARTED,
+		context: {
+			call: toAppMediaCall(call),
+			startedAt: call.activatedAt || new Date(),
+		},
+	}));
+}
+
+export async function notifyAppsOfMediaCallParticipantJoined(callId: IMediaCall['_id']): Promise<void> {
+	return triggerPostMediaCallEvent(callId, (call) => ({
+		method: AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED,
+		context: {
+			call: toAppMediaCall(call),
+			// Calls are strictly two-party, so the side that joins is always the callee
+			participant: toAppContact(call.callee),
+			joinedAt: call.acceptedAt || new Date(),
+		},
+	}));
+}
+
+export async function notifyAppsOfMediaCallEnded(callId: IMediaCall['_id']): Promise<void> {
+	return triggerPostMediaCallEvent(callId, (call) => ({
+		method: AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED,
+		context: {
+			call: toAppMediaCall(call),
+			endedAt: call.endedAt || new Date(),
+			...(call.endedBy && { endedBy: toAppActor(call.endedBy) }),
+			...(call.hangupReason && { hangupReason: call.hangupReason }),
+			durationMs: getCallDurationInMs(call),
+		},
+	}));
+}
+
+/**
+ * Runs the pre-media-call-created event and translates its outcome back into
+ * something the media call server understands. Apps may block the call or change
+ * the features it was requested with; anything else they try to patch is dropped
+ * by the listener manager.
+ */
+export async function runPreMediaCallCreatedAppHook(params: PreCallCreatedHookParams): Promise<PreCallCreatedHookResult> {
+	if (!Apps.self) {
+		return { prevented: false };
+	}
+
+	const context: IPreMediaCallCreatedContext = {
+		caller: toAppContact(params.caller),
+		callee: toAppContact(params.callee),
+		createdBy: toAppContact(params.createdBy),
+		features: [...params.features],
+		...(params.parentCallId && { parentCallId: params.parentCallId }),
+	};
+
+	const outcome = (await triggerMediaCallEvent({
+		method: AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED,
+		context,
+	})) as PreMediaCallCreatedOutcome | undefined;
+
+	if (!outcome) {
+		return { prevented: false };
+	}
+
+	if (outcome.prevented) {
+		logger.info({
+			msg: 'An app prevented a media call from being created',
+			appId: outcome.appId,
+			reason: outcome.reason || outcome.i18n?.key,
+		});
+
+		return { prevented: true, reason: outcome.reason || outcome.i18n?.key };
+	}
+
+	// Apps are free to ask for features that don't exist; only the known ones move on
+	const features = outcome.context.features.filter(isCallFeature);
+
+	return { prevented: false, features };
+}

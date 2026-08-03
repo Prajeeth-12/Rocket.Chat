@@ -1,4 +1,5 @@
 import type { IEmailDescriptor, IPreEmailSentContext } from '@rocket.chat/apps-engine/definition/email';
+import { isEventResult } from '@rocket.chat/apps-engine/definition/eventResult';
 import { EssentialAppDisabledException } from '@rocket.chat/apps-engine/definition/exceptions';
 import type { IExternalComponent } from '@rocket.chat/apps-engine/definition/externalComponent';
 import type {
@@ -8,6 +9,12 @@ import type {
 	IVisitor,
 } from '@rocket.chat/apps-engine/definition/livechat';
 import type { ILivechatDepartmentEventContext } from '@rocket.chat/apps-engine/definition/livechat/ILivechatEventContext';
+import type {
+	IPreMediaCallCreatedContext,
+	MediaCallCreatePatch,
+	MediaCallEvent,
+	PreMediaCallCreatedOutcome,
+} from '@rocket.chat/apps-engine/definition/mediaCalls';
 import type {
 	IMessage,
 	IMessageDeleteContext,
@@ -242,6 +249,13 @@ export interface IListenerExecutor {
 		args: [IUserStatusContext];
 		result: void;
 	};
+	// Media calls
+	// Every media-call event shares this entry: the envelope's `method` selects
+	// which of `IMediaCallHandler`'s optional methods to dispatch to.
+	[AppInterface.IMediaCallHandler]: {
+		args: [MediaCallEvent];
+		result: PreMediaCallCreatedOutcome | void;
+	};
 }
 
 // type EventReturn = void | boolean | IMessage | IRoom | IUser | IUIKitResponse | ILivechatRoom | IEmailDescriptor;
@@ -466,6 +480,9 @@ export class AppListenerManager {
 				return this.executePostUserLoggedOut(data as IUser);
 			case AppInterface.IPostUserStatusChanged:
 				return this.executePostUserStatusChanged(data as IUserStatusContext);
+			// Media calls
+			case AppInterface.IMediaCallHandler:
+				return this.executeMediaCallEvent(data as MediaCallEvent);
 			default:
 				console.warn('An invalid listener was called');
 		}
@@ -1278,6 +1295,99 @@ export class AppListenerManager {
 			const app = this.manager.getOneById(appId);
 
 			await app.call(AppMethod.EXECUTE_POST_USER_STATUS_CHANGED, data);
+		}
+	}
+
+	// Media calls
+	private async executeMediaCallEvent(event: MediaCallEvent): Promise<PreMediaCallCreatedOutcome | void> {
+		if (event.method === AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED) {
+			return this.executePreMediaCallCreated(event.context);
+		}
+
+		// Post events must not add latency to call signaling, so they are not awaited
+		void this.executePostMediaCallEvent(event);
+	}
+
+	private async executePreMediaCallCreated(data: IPreMediaCallCreatedContext): Promise<PreMediaCallCreatedOutcome> {
+		let context = data;
+
+		for (const appId of this.listeners.get(AppInterface.IMediaCallHandler)) {
+			const app = this.manager.getOneById(appId);
+
+			const continueOn = (await app.call(AppMethod.CHECK_PRE_MEDIA_CALL_CREATED, context).catch((error) => {
+				// This method is optional, so if it doesn't exist, we should continue
+				if (error?.code === JSONRPC_METHOD_NOT_FOUND) {
+					return true;
+				}
+
+				throw error;
+			})) as boolean;
+
+			if (!continueOn) {
+				continue;
+			}
+
+			const result = await app.call(AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED, context).catch((error) => {
+				// Every method of IMediaCallHandler is optional: an app may implement the
+				// interface for the post events alone
+				if (error?.code === JSONRPC_METHOD_NOT_FOUND) {
+					return undefined;
+				}
+
+				throw error;
+			});
+
+			if (!isEventResult(result)) {
+				continue;
+			}
+
+			switch (result.type) {
+				case 'prevent':
+					return {
+						prevented: true,
+						appId,
+						...('reason' in result && { reason: result.reason }),
+						...('i18n' in result && { i18n: result.i18n }),
+					};
+				case 'patch':
+					context = { ...context, ...this.getMediaCallCreatePatch(appId, result.patch) };
+					break;
+				case 'pass':
+					break;
+				default:
+					console.warn(`App ${appId} returned an unsupported EventResult from ${AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED}: ${result.type}`);
+			}
+		}
+
+		return { prevented: false, context };
+	}
+
+	/** Contacts are the outcome of routing and of permission checks, so only features may be patched. */
+	private getMediaCallCreatePatch(appId: string, patch: Partial<MediaCallCreatePatch>): Partial<MediaCallCreatePatch> {
+		const unsupported = Object.keys(patch).filter((key) => key !== 'features');
+
+		if (unsupported.length) {
+			console.warn(`App ${appId} tried to patch unsupported media call properties: ${unsupported.join(', ')}`);
+		}
+
+		return Array.isArray(patch.features) ? { features: patch.features } : {};
+	}
+
+	private async executePostMediaCallEvent(
+		event: Exclude<MediaCallEvent, { method: AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED }>,
+	): Promise<void> {
+		for (const appId of this.listeners.get(AppInterface.IMediaCallHandler)) {
+			const app = this.manager.getOneById(appId);
+
+			// Nothing is waiting on these events, so one app must not keep the others
+			// from being notified - not even by not implementing the method at all
+			await app.call(event.method, event.context).catch((error) => {
+				if (error?.code === JSONRPC_METHOD_NOT_FOUND) {
+					return;
+				}
+
+				console.error(`App ${appId} failed to handle ${event.method}`, error);
+			});
 		}
 	}
 }

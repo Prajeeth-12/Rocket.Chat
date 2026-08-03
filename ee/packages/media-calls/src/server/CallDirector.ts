@@ -15,6 +15,7 @@ import { MediaCallNegotiations, MediaCalls } from '@rocket.chat/models';
 import { getCastDirector, getMediaCallServer } from './injection';
 import type { IMediaCallAgent } from '../definition/IMediaCallAgent';
 import type { IMediaCallCastDirector } from '../definition/IMediaCallCastDirector';
+import { CallRejectedError } from '../definition/common';
 import type { InternalCallParams, MediaCallHeader } from '../definition/common';
 import { logger } from '../logger';
 
@@ -86,6 +87,8 @@ class MediaCallDirector {
 			logger.error({ msg: 'Unable to find up to date call data', callId: call._id });
 			return false;
 		}
+
+		getMediaCallServer().emitter.emit('callAccepted', { callId: call._id, uids: updatedCall.uids });
 
 		await calleeAgent.onCallAccepted(updatedCall);
 		await calleeAgent.oppositeAgent?.onCallAccepted(updatedCall);
@@ -209,7 +212,22 @@ class MediaCallDirector {
 		callerAgent.oppositeAgent = calleeAgent;
 		calleeAgent.oppositeAgent = callerAgent;
 
-		const allowedFeatures = features.filter((feature) => getMediaCallServer().isFeatureAvailableForUser(caller.id, feature));
+		const createdBy = requestedBy || caller;
+
+		// Last look before the call exists: the host may still block it or change the requested features
+		const hookResult = await getMediaCallServer().runPreCallCreatedHook({ caller, callee, createdBy, features, parentCallId });
+		if (hookResult.prevented) {
+			logger.info({
+				msg: 'Call creation was prevented',
+				reason: hookResult.reason,
+				callerType: caller.type,
+				calleeType: callee.type,
+			});
+			throw new CallRejectedError('forbidden', hookResult.reason);
+		}
+
+		const requestedFeatures = hookResult.features || features;
+		const allowedFeatures = requestedFeatures.filter((feature) => getMediaCallServer().isFeatureAvailableForUser(caller.id, feature));
 		const call: Omit<IMediaCall, '_updatedAt'> = {
 			// Use UUIDs to identify all media calls, for better compatibility with libs that require it (such as React Native's CallKit)
 			_id: randomUUID(),
@@ -217,7 +235,7 @@ class MediaCallDirector {
 			kind: 'direct',
 			state: 'none',
 
-			createdBy: requestedBy || caller,
+			createdBy,
 			createdAt: new Date(),
 
 			caller,

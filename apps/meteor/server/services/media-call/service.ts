@@ -21,6 +21,12 @@ import type { InsertionModel } from '@rocket.chat/model-typings';
 import { CallHistory, MediaCalls, Rooms, Users } from '@rocket.chat/models';
 import { callStateToTranslationKey, getHistoryMessagePayload } from '@rocket.chat/ui-voip/dist/ui-kit/getHistoryMessagePayload';
 
+import {
+	notifyAppsOfMediaCallEnded,
+	notifyAppsOfMediaCallParticipantJoined,
+	notifyAppsOfMediaCallStarted,
+	runPreMediaCallCreatedAppHook,
+} from './appEvents';
 import { logger } from './logger';
 import { sendVoipPushNotification } from './push/sendVoipPushNotification';
 import { i18n } from '../../lib/i18n';
@@ -40,6 +46,12 @@ export class MediaCallService extends ServiceClassInternal implements IMediaCall
 		callServer.emitter.on('historyUpdate', ({ callId }) => setImmediate(() => this.saveCallToHistory(callId)));
 		callServer.emitter.on('pushNotificationRequest', ({ callId, event }) => sendVoipPushNotification(callId, event));
 		this.onEvent('media-call.updated', (params) => callServer.receiveCallUpdate(params));
+
+		// Apps-Engine media call events
+		callServer.emitter.on('callAccepted', ({ callId }) => this.notifyApps(callId, notifyAppsOfMediaCallParticipantJoined));
+		callServer.emitter.on('callActivated', ({ callId }) => this.notifyApps(callId, notifyAppsOfMediaCallStarted));
+		callServer.emitter.on('callEnded', ({ callId }) => this.notifyApps(callId, notifyAppsOfMediaCallEnded));
+		callServer.setHooks({ onPreCallCreated: runPreMediaCallCreatedAppHook });
 
 		this.onEvent('watch.settings', async ({ setting }): Promise<void> => {
 			if (setting._id.startsWith('VoIP_TeamCollab_')) {
@@ -143,6 +155,13 @@ export class MediaCallService extends ServiceClassInternal implements IMediaCall
 		}
 
 		return signals;
+	}
+
+	/** Apps observe calls, they don't take part in them: never let one delay or break call signaling. */
+	private notifyApps(callId: IMediaCall['_id'], notify: (callId: IMediaCall['_id']) => Promise<void>): void {
+		setImmediate(() => {
+			notify(callId).catch((err) => logger.error({ msg: 'Failed to notify apps about a media call event', err, callId }));
+		});
 	}
 
 	private async saveCallToHistory(callId: IMediaCall['_id']): Promise<void> {
