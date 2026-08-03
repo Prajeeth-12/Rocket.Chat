@@ -38,15 +38,10 @@ export type EventResult<T = unknown> =
 	| ({ type: 'prompt' } & PromptPayload);
 
 /** Branded variant returned by `EventResult.pass()`. */
-export interface PassEventResult extends IMarker {
-	type: 'pass';
-}
+export type PassEventResult = IMarker & { type: 'pass' };
 
 /** Branded variant returned by `EventResult.patch()`. */
-export interface PatchEventResult<T> extends IMarker {
-	type: 'patch';
-	patch: Partial<T>;
-}
+export type PatchEventResult<T> = IMarker & { type: 'patch'; patch: Partial<T> };
 
 /** Branded variant returned by `EventResult.prevent()`. */
 export type PreventEventResult = IMarker & { type: 'prevent' } & ({ reason: string } | { i18n: I18nMessage });
@@ -68,20 +63,21 @@ export type MarkedEventResult<T = unknown> = PassEventResult | PatchEventResult<
  * return type is a restricted union (e.g. `pass | patch`) fails to typecheck if
  * an author returns a disallowed variant (e.g. `prompt`).
  */
+// eslint-disable-next-line @typescript-eslint/no-redeclare -- the union type and the factory namespace share a name on purpose
 export const EventResult = {
 	pass(): PassEventResult {
-		return { '@kind': EVENT_RESULT_KIND, type: 'pass' };
+		return { '@kind': EVENT_RESULT_KIND, 'type': 'pass' };
 	},
 
 	patch<T>(patch: Partial<T>): PatchEventResult<T> {
-		return { '@kind': EVENT_RESULT_KIND, type: 'patch', patch };
+		return { '@kind': EVENT_RESULT_KIND, 'type': 'patch', patch };
 	},
 
 	prevent(input: { reason: string } | { i18n: I18nMessage }): PreventEventResult {
-		return { '@kind': EVENT_RESULT_KIND, type: 'prevent', ...input };
+		return { '@kind': EVENT_RESULT_KIND, 'type': 'prevent', ...input };
 	},
 
 	prompt(input: PromptPayload): PromptEventResult {
-		return { '@kind': EVENT_RESULT_KIND, type: 'prompt', ...input };
+		return { '@kind': EVENT_RESULT_KIND, 'type': 'prompt', ...input };
 	},
 };
