@@ -10,8 +10,13 @@ lifecycle events/hooks, read/modify data accessors, provider registration, persi
 surfaces — with file references dense enough to drive follow-up implementation work.
 
 **Audience:** Engineers and AI agents refining/implementing these extension points. Every claim is anchored to a
-`path:line`. Nothing below exists today as an apps-engine integration — media calls currently have **zero**
-apps-engine surface. This document identifies the seams where one would be added.
+`path:line`. This document was written when media calls had **zero** apps-engine surface, and it identifies the seams
+where one would be added.
+
+**Status:** the lifecycle events of §2.A are implemented (see §3 Phase 1); everything else below is still a proposal.
+The events ship as a single `IMediaCallHandler` interface with one optional method per event
+(`packages/apps-engine/src/definition/mediaCalls/`) — Prototype 4 of `prototypes/ergonomics-evaluation.md` — over
+per-event dispatch in `AppListenerManager`, and they are triggered from `apps/meteor/server/services/media-call/appEvents.ts`.
 
 ---
 
@@ -315,9 +320,14 @@ policy callbacks (`IMediaCallServerSettings.permissionCheck` / `isFeatureAvailab
 
 ## 3. Recommended phasing
 
-1. **Phase 1 — Observe (cheap, high value).** Strategy-1 Post events subscribed to `callServer.emitter`
-   (`service.ts:36-41`): `IPostMediaCallActivated`, `IPostMediaCallEnded` (+ history/push). Add `IMediaCallRead`
-   and the `MEDIA_CALL` association. Enables analytics/CDR/compliance/notification apps with no engine changes.
+1. **Phase 1 — Observe (cheap, high value).** ✅ *Implemented*, as the four events of `IMediaCallHandler`:
+   `executePostMediaCallStarted` (`callActivated`), `executePostMediaCallParticipantJoined` (a new `callAccepted`
+   emitter event), `executePostMediaCallEnded` (`callEnded`), plus the preventable/patchable
+   `executePreMediaCallCreated` — which needed the Strategy-2 hook bus after all (`IMediaCallServer.setHooks` /
+   `runPreCallCreatedHook`, consulted in `MediaCallDirector.createCall`), since a veto has to be awaited.
+   Prevention reuses the `CallRejectedError('forbidden')` contract; the app's reason is logged but not yet carried to
+   the client over the `rejected-call-request` signal. Still open from this phase: `IMediaCallRead` and the
+   `MEDIA_CALL` association.
 2. **Phase 2 — Act.** `IMediaCallModify` action methods (`hangup`/`transfer`/`sendDTMF`) + remaining Post events
    (created/ringing/accepted/transferred/DTMF). Requires the EE engine hook bus (Strategy 2 scaffolding).
 3. **Phase 3 — Intervene.** Pre-Prevent/Modify hooks (`IPreMediaCallRequested`, `IPreMediaCallCreated`,

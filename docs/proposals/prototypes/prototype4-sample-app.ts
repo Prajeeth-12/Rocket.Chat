@@ -11,9 +11,9 @@ import { App } from '@rocket.chat/apps-engine/definition/App';
 import type { IAppAccessors, IConfigurationExtend, IHttp, IModify, IPersistence, IRead } from '@rocket.chat/apps-engine/definition/accessors';
 import type { ILogger } from '@rocket.chat/apps-engine/definition/accessors';
 import { EventResult } from '@rocket.chat/apps-engine/definition/eventResult';
-import type { IMediaCallHandler } from '@rocket.chat/apps-engine/definition/mediaCallsAggregate';
 import type {
 	IMediaCallEndedContext,
+	IMediaCallHandler,
 	IMediaCallParticipantJoinedContext,
 	IMediaCallStartedContext,
 	IPreMediaCallCreatedContext,
