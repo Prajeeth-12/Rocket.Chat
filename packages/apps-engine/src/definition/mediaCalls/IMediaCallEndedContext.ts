@@ -1,15 +1,17 @@
-import type { IRoom } from '../rooms';
-import type { IUser } from '../users';
+import type { IMediaCall, IMediaCallActor } from './IMediaCall';
 
-export type MediaCallEndReason = 'completed' | 'declined' | 'missed' | 'failed' | 'cancelled';
-
-/** Context passed to the post-media-call-ended handler, once a call has ended. */
+/**
+ * Context of `executePostMediaCallEnded`. Every call ends through this event,
+ * including the ones no user ended — expiration, transport errors and transfers
+ * report a `'server'` actor in `endedBy`.
+ */
 export interface IMediaCallEndedContext {
-	callId: string;
-	room: IRoom;
-	caller: IUser;
-	callee: IUser;
+	call: IMediaCall;
 	endedAt: Date;
-	reason: MediaCallEndReason;
-	durationMs?: number;
+	/** Absent when the call was ended by something that isn't an identifiable actor. */
+	endedBy?: IMediaCallActor;
+	/** Free-form reason recorded by whoever ended the call, e.g. `'not-answered'`, `'expired'`, `'transfer'`. */
+	hangupReason?: string;
+	/** How long media was flowing. `0` for calls that never became active. */
+	durationMs: number;
 }

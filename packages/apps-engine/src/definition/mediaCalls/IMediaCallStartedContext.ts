@@ -1,13 +1,10 @@
-import type { MediaCallFeature } from './IMediaCallCreateContext';
-import type { IRoom } from '../rooms';
-import type { IUser } from '../users';
+import type { IMediaCall } from './IMediaCall';
 
-/** Context passed to the post-media-call-started handler, once a call has started. */
+/**
+ * Context of `executePostMediaCallStarted` — media has been confirmed flowing by
+ * at least one of the two sides of the call.
+ */
 export interface IMediaCallStartedContext {
-	callId: string;
-	room: IRoom;
-	caller: IUser;
-	callee: IUser;
-	features: MediaCallFeature[];
+	call: IMediaCall;
 	startedAt: Date;
 }

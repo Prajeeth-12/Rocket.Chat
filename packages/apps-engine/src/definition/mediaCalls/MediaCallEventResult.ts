@@ -1,4 +1,4 @@
-import type { IMediaCallCreateContext } from './IMediaCallCreateContext';
+import type { MediaCallCreatePatch } from './IPreMediaCallCreatedContext';
 import type { PassEventResult, PatchEventResult, PreventEventResult } from '../eventResult';
 
 /**
@@ -6,4 +6,4 @@ import type { PassEventResult, PatchEventResult, PreventEventResult } from '../e
  * `prompt` is not yet permitted here — see the per-event capability matrix in
  * docs/proposals/apps-engine-event-result-return-type.md.
  */
-export type MediaCallCreateEventResult = PassEventResult | PatchEventResult<IMediaCallCreateContext> | PreventEventResult;
+export type MediaCallCreateEventResult = PassEventResult | PatchEventResult<MediaCallCreatePatch> | PreventEventResult;

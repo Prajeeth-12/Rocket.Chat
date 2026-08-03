@@ -1,10 +1,16 @@
-import type { IRoom } from '../rooms';
-import type { IUser } from '../users';
+import type { IMediaCall, IMediaCallContact } from './IMediaCall';
 
-/** Context passed to the post-media-call-participant-joined handler. */
+/**
+ * Context of `executePostMediaCallParticipantJoined`, emitted when the callee
+ * accepts the call.
+ *
+ * Media calls are strictly two-party (`kind: 'direct'`), so this event fires at
+ * most once per call and `participant` is always the callee — there is no
+ * server-side participant list to join or leave. The departure side of a call is
+ * `executePostMediaCallEnded`.
+ */
 export interface IMediaCallParticipantJoinedContext {
-	callId: string;
-	room: IRoom;
-	participant: IUser;
+	call: IMediaCall;
+	participant: IMediaCallContact;
 	joinedAt: Date;
 }
