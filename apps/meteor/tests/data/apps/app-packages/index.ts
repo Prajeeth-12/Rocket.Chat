@@ -23,3 +23,6 @@ export const appExternalIdTest = path.resolve(__dirname, './external-id-test_0.0
 export const messageReactionTest = path.resolve(__dirname, './message-updater-test_0.0.1.zip');
 
 export const appPresenceStateTest = path.resolve(__dirname, './presence-state-test_0.0.1.zip');
+
+// Source lives in ./src/media-call-events-test - see the README for how to rebuild it.
+export const appMediaCallEventsTest = path.resolve(__dirname, './media-call-events-test_0.0.1.zip');

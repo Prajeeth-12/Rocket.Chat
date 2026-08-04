@@ -1,0 +1,10 @@
+{
+	"name": "media-call-events-test",
+	"version": "0.0.1",
+	"private": true,
+	"description": "Test app for the media call lifecycle events exposed to the Apps-Engine",
+	"comment": "Not a yarn workspace member. `@rocket.chat/apps-engine` is resolved from the monorepo root node_modules (a symlink to packages/apps-engine), so `rc-apps package` bundles the in-tree engine and no install is needed here.",
+	"devDependencies": {
+		"@rocket.chat/apps-engine": "^1.65.0"
+	}
+}

@@ -19,6 +19,34 @@ describe('My tests', () => {
 });
 ```
 
+Playwright tests use the equivalent helpers from `tests/e2e/utils/apps.ts` (`installLocalTestPackage`, `uninstallApp`, `getAppLogs`, `findAppLogItem`) instead.
+
+## How to rebuild a package
+
+Most packages here are pre-built and have their source in a `<details>` block below. Newer ones keep their
+source under `./src/<app-name>/`, which is preferred — regenerating a zip from a real source tree beats
+copy-pasting out of markdown.
+
+To rebuild one:
+
+```sh
+cd apps/meteor/tests/data/apps/app-packages/src/<app-name>
+rc-apps package                      # @rocket.chat/apps-cli
+cp dist/<app-name>_<version>.zip ../../
+rm -rf dist
+```
+
+Two things to know:
+
+- The app dir **must** be inside this repo. `@rocket.chat/apps-engine` is not installed there; it resolves
+  upward to the monorepo root `node_modules`, which is a symlink to `packages/apps-engine`. This is what lets
+  a fixture typecheck against unreleased engine APIs with no install step.
+- `@rocket.chat/apps-engine/*` is left **external** in the bundle (see `external:` in
+  `packages/apps/src/server/runtime/base/bundler.ts`), and the Deno runtime maps it back to
+  `packages/apps-engine/` (`packages/apps/deno-runtime/deno.jsonc`). So a packaged app runs against the
+  *server's* engine, not a frozen copy of it — an app can call engine APIs that did not exist when it was
+  packaged, and the zip does not need rebuilding when those APIs change.
+
 ### Available apps
 
 #### IPreFileUpload handler
@@ -667,3 +695,38 @@ export class UiKitRoomTestApp extends App implements IUIKitInteractionHandler {
 ```
 
 </details>
+
+#### Media call lifecycle events (IMediaCallHandler)
+
+File name: `media-call-events-test_0.0.1.zip`
+Source: [`./src/media-call-events-test`](./src/media-call-events-test)
+
+An app implementing every method of `IMediaCallHandler`. It records what each handler received in the app
+logs, which is how `tests/e2e/apps/media-call-events.spec.ts` asserts the events actually arrived, and it
+answers the pre-create event according to a mode the test sets beforehand.
+
+`checkPreMediaCallCreated` is deliberately **not** implemented, so installing this app also covers the
+listener manager's `JSONRPC_METHOD_NOT_FOUND` fallback for that optional method.
+
+**Mode endpoint:**
+
+- `POST /api/apps/public/:appId/mode` with `{ "mode": "pass" | "prevent" | "drop-screen-share" }`
+- `GET /api/apps/public/:appId/mode` returns the current mode (defaults to `pass`)
+
+The mode drives `executePreMediaCallCreated`:
+
+| Mode | Returns |
+| --- | --- |
+| `pass` | `EventResult.pass()` |
+| `prevent` | `EventResult.prevent({ reason: 'blocked by media-call-events-test' })` |
+| `drop-screen-share` | `EventResult.patch({ features })` with `screen-share` removed |
+
+Driving the outcome from a mode rather than from the callee's username matters: a call that fails because the
+callee was unreachable looks identical in the UI to one an app blocked, so the tests need to run the *same*
+user pair through both a passing and a prevented call.
+
+**Log labels** (read with `findAppLogItem`): `pre_created_mode`, `pre_created_caller`, `pre_created_callee`,
+`pre_created_created_by`, `pre_created_features`, `pre_created_caller_keys`, `post_started_*`,
+`post_joined_*`, `post_ended_*`. `pre_created_caller_keys` / `post_joined_participant_keys` list the keys of
+the contact the app received, so a test can assert the per-session signing token (`contractId`) never
+crossed into the app.

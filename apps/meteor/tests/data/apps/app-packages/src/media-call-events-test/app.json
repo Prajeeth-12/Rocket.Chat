@@ -1,0 +1,18 @@
+{
+    "id": "b08a058f-58d5-4a4f-9279-a47a77fcebe3",
+    "version": "0.0.1",
+    "requiredApiVersion": "^1.65.0",
+    "iconFile": "icon.png",
+    "author": {
+        "name": "App tester",
+        "homepage": "none",
+        "support": "nope"
+    },
+    "name": "media call events test",
+    "nameSlug": "media-call-events-test",
+    "classFile": "MediaCallEventsTestApp.ts",
+    "description": "App for testing the media call lifecycle events",
+    "implements": [
+        "IMediaCallHandler"
+    ]
+}
