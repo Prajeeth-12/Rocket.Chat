@@ -1,0 +1,372 @@
+import type { MediaCallEvent } from '@rocket.chat/apps-engine/definition/mediaCalls';
+import { AppInterface, AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
+import type { IMediaCall } from '@rocket.chat/core-typings';
+import type { PreCallCreatedHookParams } from '@rocket.chat/media-calls';
+import { expect } from 'chai';
+import { afterEach, beforeEach, describe, it } from 'mocha';
+import proxyquire from 'proxyquire';
+import sinon from 'sinon';
+
+const triggerEvent = sinon.stub();
+const AppsMock: { self: { triggerEvent: sinon.SinonStub } | undefined } = { self: { triggerEvent } };
+const findOneById = sinon.stub();
+const loggerMock = { warn: sinon.stub(), info: sinon.stub() };
+
+const { notifyAppsOfMediaCallStarted, notifyAppsOfMediaCallParticipantJoined, notifyAppsOfMediaCallEnded, runPreMediaCallCreatedAppHook } =
+	proxyquire.noCallThru().load('../../../../../server/services/media-call/appEvents', {
+		'@rocket.chat/apps': { Apps: AppsMock, AppEvents: AppInterface },
+		'@rocket.chat/models': { MediaCalls: { findOneById } },
+		'./logger': { logger: loggerMock },
+	});
+
+/**
+ * Contacts as they are stored: every one of them carries a `contractId`, which is
+ * the credential that must never reach an app.
+ */
+function makeCall(overrides: Partial<IMediaCall> = {}): IMediaCall {
+	return {
+		_id: 'call-id',
+		service: 'webrtc',
+		kind: 'direct',
+		state: 'hangup',
+		createdBy: { type: 'user', id: 'caller-id', username: 'caller', contractId: 'created-by-contract' },
+		createdAt: new Date('2026-01-01T10:00:00.000Z'),
+		caller: {
+			type: 'user',
+			id: 'caller-id',
+			username: 'caller',
+			displayName: 'The Caller',
+			sipExtension: '1001',
+			contractId: 'caller-contract',
+		},
+		callee: { type: 'user', id: 'callee-id', username: 'callee', contractId: 'callee-contract' },
+		ended: true,
+		expiresAt: new Date('2026-01-01T11:00:00.000Z'),
+		uids: ['caller-id', 'callee-id'],
+		features: ['audio'],
+		...overrides,
+	} as IMediaCall;
+}
+
+function hookParams(overrides: Partial<PreCallCreatedHookParams> = {}): PreCallCreatedHookParams {
+	return {
+		caller: { type: 'user', id: 'caller-id', username: 'caller', contractId: 'caller-contract' },
+		callee: { type: 'user', id: 'callee-id', username: 'callee', contractId: 'callee-contract' },
+		createdBy: { type: 'user', id: 'caller-id', username: 'caller', contractId: 'created-by-contract' },
+		features: ['audio'],
+		...overrides,
+	} as PreCallCreatedHookParams;
+}
+
+/** The single event handed to the Apps-Engine, asserting it travelled under `IMediaCallHandler`. */
+function dispatchedEvent(): MediaCallEvent {
+	expect(triggerEvent.callCount).to.equal(1);
+
+	const [interfaceName, event] = triggerEvent.firstCall.args;
+	expect(interfaceName).to.equal(AppInterface.IMediaCallHandler);
+
+	return event;
+}
+
+describe('media call app events', () => {
+	beforeEach(() => {
+		triggerEvent.reset();
+		triggerEvent.resolves(undefined);
+		findOneById.reset();
+		loggerMock.warn.reset();
+		loggerMock.info.reset();
+		AppsMock.self = { triggerEvent };
+	});
+
+	afterEach(() => sinon.restore());
+
+	describe('contact mapping', () => {
+		it('never lets a contractId reach an app', async () => {
+			findOneById.resolves(makeCall({ activatedAt: new Date('2026-01-01T10:00:05.000Z') }));
+
+			await notifyAppsOfMediaCallEnded('call-id');
+
+			const { context } = dispatchedEvent() as { context: { call: Record<string, any> } };
+
+			expect(context.call.caller).to.not.have.property('contractId');
+			expect(context.call.callee).to.not.have.property('contractId');
+			expect(context.call.createdBy).to.not.have.property('contractId');
+		});
+
+		it('never lets a contractId reach an app through the pre-create context', async () => {
+			await runPreMediaCallCreatedAppHook(hookParams());
+
+			const { context } = dispatchedEvent() as { context: Record<string, any> };
+
+			expect(context.caller).to.not.have.property('contractId');
+			expect(context.callee).to.not.have.property('contractId');
+			expect(context.createdBy).to.not.have.property('contractId');
+		});
+
+		it('copies every allowed contact field over', async () => {
+			findOneById.resolves(makeCall());
+
+			await notifyAppsOfMediaCallEnded('call-id');
+
+			const { context } = dispatchedEvent() as { context: { call: Record<string, any> } };
+
+			expect(context.call.caller).to.deep.equal({
+				type: 'user',
+				id: 'caller-id',
+				username: 'caller',
+				displayName: 'The Caller',
+				sipExtension: '1001',
+			});
+		});
+
+		it('omits the optional contact fields that are not set rather than sending them as undefined', async () => {
+			findOneById.resolves(makeCall({ callee: { type: 'sip', id: 'callee-id', contractId: 'callee-contract' } }));
+
+			await notifyAppsOfMediaCallEnded('call-id');
+
+			const { context } = dispatchedEvent() as { context: { call: Record<string, any> } };
+
+			expect(Object.keys(context.call.callee)).to.deep.equal(['type', 'id']);
+		});
+	});
+
+	describe('notifyAppsOfMediaCallStarted', () => {
+		it('dispatches the started event with the moment media started flowing', async () => {
+			const activatedAt = new Date('2026-01-01T10:00:05.000Z');
+			findOneById.resolves(makeCall({ state: 'active', ended: false, activatedAt }));
+
+			await notifyAppsOfMediaCallStarted('call-id');
+
+			const event = dispatchedEvent();
+
+			expect(event.method).to.equal(AppMethod.EXECUTE_POST_MEDIA_CALL_STARTED);
+			expect(event.context).to.have.nested.property('call.id', 'call-id');
+			expect((event.context as { startedAt: Date }).startedAt).to.deep.equal(activatedAt);
+		});
+
+		it('falls back to the current time when the call has no activation timestamp', async () => {
+			const now = new Date('2026-01-01T10:30:00.000Z');
+			sinon.useFakeTimers({ now, toFake: ['Date'] });
+			findOneById.resolves(makeCall({ activatedAt: undefined }));
+
+			await notifyAppsOfMediaCallStarted('call-id');
+
+			expect((dispatchedEvent().context as { startedAt: Date }).startedAt).to.deep.equal(now);
+		});
+	});
+
+	describe('notifyAppsOfMediaCallParticipantJoined', () => {
+		it('dispatches the callee as the participant that joined', async () => {
+			const acceptedAt = new Date('2026-01-01T10:00:03.000Z');
+			findOneById.resolves(makeCall({ state: 'accepted', ended: false, acceptedAt }));
+
+			await notifyAppsOfMediaCallParticipantJoined('call-id');
+
+			const event = dispatchedEvent();
+
+			expect(event.method).to.equal(AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED);
+
+			const context = event.context as { participant: Record<string, any>; joinedAt: Date; call: { callee: unknown } };
+			expect(context.participant).to.deep.equal(context.call.callee);
+			expect(context.participant).to.deep.equal({ type: 'user', id: 'callee-id', username: 'callee' });
+			expect(context.joinedAt).to.deep.equal(acceptedAt);
+		});
+
+		it('falls back to the current time when the call has no acceptance timestamp', async () => {
+			const now = new Date('2026-01-01T10:30:00.000Z');
+			sinon.useFakeTimers({ now, toFake: ['Date'] });
+			findOneById.resolves(makeCall({ acceptedAt: undefined }));
+
+			await notifyAppsOfMediaCallParticipantJoined('call-id');
+
+			expect((dispatchedEvent().context as { joinedAt: Date }).joinedAt).to.deep.equal(now);
+		});
+	});
+
+	describe('notifyAppsOfMediaCallEnded', () => {
+		it('dispatches who ended the call and why when both are known', async () => {
+			const endedAt = new Date('2026-01-01T10:01:00.000Z');
+			findOneById.resolves(
+				makeCall({
+					endedAt,
+					endedBy: { type: 'user', id: 'callee-id', contractId: 'callee-contract' },
+					hangupReason: 'not-answered',
+				}),
+			);
+
+			await notifyAppsOfMediaCallEnded('call-id');
+
+			const event = dispatchedEvent();
+
+			expect(event.method).to.equal(AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED);
+
+			const context = event.context as Record<string, any>;
+			expect(context.endedAt).to.deep.equal(endedAt);
+			// Actors are mapped down to type and id alone, so no contractId travels here either
+			expect(context.endedBy).to.deep.equal({ type: 'user', id: 'callee-id' });
+			expect(context.hangupReason).to.equal('not-answered');
+		});
+
+		it('omits endedBy and hangupReason when the call recorded neither', async () => {
+			findOneById.resolves(makeCall({ endedAt: new Date('2026-01-01T10:01:00.000Z') }));
+
+			await notifyAppsOfMediaCallEnded('call-id');
+
+			const context = dispatchedEvent().context as Record<string, any>;
+
+			expect(context).to.not.have.property('endedBy');
+			expect(context).to.not.have.property('hangupReason');
+		});
+
+		it('reports a server actor as the one that ended the call', async () => {
+			findOneById.resolves(makeCall({ endedBy: { type: 'server', id: 'server' }, hangupReason: 'expired' }));
+
+			await notifyAppsOfMediaCallEnded('call-id');
+
+			expect((dispatchedEvent().context as Record<string, any>).endedBy).to.deep.equal({ type: 'server', id: 'server' });
+		});
+
+		describe('durationMs', () => {
+			async function durationOf(overrides: Partial<IMediaCall>): Promise<number> {
+				findOneById.resolves(makeCall(overrides));
+
+				await notifyAppsOfMediaCallEnded('call-id');
+
+				return (dispatchedEvent().context as { durationMs: number }).durationMs;
+			}
+
+			it('is zero for a call that never became active', async () => {
+				expect(await durationOf({ activatedAt: undefined, endedAt: new Date('2026-01-01T10:01:00.000Z') })).to.equal(0);
+			});
+
+			it('is the time between activation and the end of the call', async () => {
+				const duration = await durationOf({
+					activatedAt: new Date('2026-01-01T10:00:05.000Z'),
+					endedAt: new Date('2026-01-01T10:01:05.000Z'),
+				});
+
+				expect(duration).to.equal(60_000);
+			});
+
+			it('is clamped to zero when the call ended before it was activated', async () => {
+				const duration = await durationOf({
+					activatedAt: new Date('2026-01-01T10:01:05.000Z'),
+					endedAt: new Date('2026-01-01T10:00:05.000Z'),
+				});
+
+				expect(duration).to.equal(0);
+			});
+
+			it('is measured against the current time for a call with no end timestamp', async () => {
+				sinon.useFakeTimers({ now: new Date('2026-01-01T10:00:35.000Z'), toFake: ['Date'] });
+
+				const duration = await durationOf({ activatedAt: new Date('2026-01-01T10:00:05.000Z'), endedAt: undefined });
+
+				expect(duration).to.equal(30_000);
+			});
+		});
+	});
+
+	describe('post event guards', () => {
+		it('does not even load the call when the Apps-Engine is not running', async () => {
+			AppsMock.self = undefined;
+
+			await notifyAppsOfMediaCallStarted('call-id');
+			await notifyAppsOfMediaCallParticipantJoined('call-id');
+			await notifyAppsOfMediaCallEnded('call-id');
+
+			expect(findOneById.callCount).to.equal(0);
+			expect(triggerEvent.callCount).to.equal(0);
+		});
+
+		it('warns and dispatches nothing for a call that no longer exists', async () => {
+			findOneById.resolves(null);
+
+			await notifyAppsOfMediaCallEnded('gone-call-id');
+
+			expect(triggerEvent.callCount).to.equal(0);
+			expect(loggerMock.warn.callCount).to.equal(1);
+			expect(loggerMock.warn.firstCall.firstArg).to.have.property('callId', 'gone-call-id');
+		});
+	});
+
+	describe('runPreMediaCallCreatedAppHook', () => {
+		it('lets the call through without consulting any app when the Apps-Engine is not running', async () => {
+			AppsMock.self = undefined;
+
+			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({ prevented: false });
+			expect(triggerEvent.callCount).to.equal(0);
+		});
+
+		it('dispatches the pre-create event with a copy of the requested features', async () => {
+			const params = hookParams({ features: ['audio', 'hold'] });
+
+			await runPreMediaCallCreatedAppHook(params);
+
+			const event = dispatchedEvent();
+
+			expect(event.method).to.equal(AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED);
+
+			const { features } = event.context as { features: string[] };
+			expect(features).to.deep.equal(['audio', 'hold']);
+			// Apps must not be handed the array the caller still holds
+			expect(features).to.not.equal(params.features);
+		});
+
+		it('carries the parent call id of a transfer, and omits it otherwise', async () => {
+			await runPreMediaCallCreatedAppHook(hookParams({ parentCallId: 'parent-call-id' }));
+			expect(dispatchedEvent().context).to.have.property('parentCallId', 'parent-call-id');
+
+			triggerEvent.resetHistory();
+
+			await runPreMediaCallCreatedAppHook(hookParams());
+			expect(dispatchedEvent().context).to.not.have.property('parentCallId');
+		});
+
+		it('lets the call through when no app answered the event', async () => {
+			triggerEvent.resolves(undefined);
+
+			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({ prevented: false });
+		});
+
+		it('reports the reason an app prevented the call', async () => {
+			triggerEvent.resolves({ prevented: true, appId: 'blocking-app', reason: 'callee is on a do-not-disturb list' });
+
+			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({
+				prevented: true,
+				reason: 'callee is on a do-not-disturb list',
+			});
+			expect(loggerMock.info.callCount).to.equal(1);
+			expect(loggerMock.info.firstCall.firstArg).to.have.property('appId', 'blocking-app');
+		});
+
+		it('falls back to the i18n key when that is all the app gave as a reason', async () => {
+			// Known lossiness: the key alone crosses over, `i18n.args` is dropped
+			triggerEvent.resolves({
+				prevented: true,
+				appId: 'blocking-app',
+				i18n: { key: 'callee_is_dnd', args: { username: 'callee' } },
+			});
+
+			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({ prevented: true, reason: 'callee_is_dnd' });
+		});
+
+		it('returns the features an app patched in', async () => {
+			triggerEvent.resolves({
+				prevented: false,
+				context: { ...hookParams(), features: ['audio', 'hold'] },
+			});
+
+			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({ prevented: false, features: ['audio', 'hold'] });
+		});
+
+		it('drops the features an app asked for that the workspace does not know about', async () => {
+			triggerEvent.resolves({
+				prevented: false,
+				context: { ...hookParams(), features: ['audio', 'teleportation', 'hold'] },
+			});
+
+			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({ prevented: false, features: ['audio', 'hold'] });
+		});
+	});
+});

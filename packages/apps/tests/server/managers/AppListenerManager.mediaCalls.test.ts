@@ -3,8 +3,12 @@ import { describe, it } from 'node:test';
 
 import { EventResult } from '@rocket.chat/apps-engine/definition/eventResult';
 import type {
+	IMediaCall,
 	IMediaCallEndedContext,
+	IMediaCallParticipantJoinedContext,
+	IMediaCallStartedContext,
 	IPreMediaCallCreatedContext,
+	MediaCallEvent,
 	PreMediaCallCreatedOutcome,
 } from '@rocket.chat/apps-engine/definition/mediaCalls';
 import { AppInterface, AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
@@ -68,6 +72,21 @@ async function runPreCallCreated(apps: ProxiedApp[]): Promise<PreMediaCallCreate
 	});
 
 	return outcome as PreMediaCallCreatedOutcome;
+}
+
+/** The `default:` and unsupported-patch branches only report themselves through `console.warn`. */
+async function capturingWarnings<T>(fn: () => Promise<T>): Promise<{ result: T; warnings: string[] }> {
+	const warnings: string[] = [];
+	const original = console.warn;
+	console.warn = (message: string) => void warnings.push(message);
+
+	try {
+		const result = await fn();
+
+		return { result, warnings };
+	} finally {
+		console.warn = original;
+	}
 }
 
 describe('AppListenerManager media call events', () => {
@@ -171,35 +190,143 @@ describe('AppListenerManager media call events', () => {
 			assert.strictEqual(executed, false);
 			assert.deepStrictEqual(outcome, { prevented: false, context });
 		});
+
+		it('runs the handler of an app whose check opted in', async () => {
+			const outcome = await runPreCallCreated([
+				mockApp('opting-in', {
+					[AppMethod.CHECK_PRE_MEDIA_CALL_CREATED]: () => true,
+					[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => EventResult.prevent({ reason: 'callee is on a do-not-disturb list' }),
+				}),
+			]);
+
+			assert.deepStrictEqual(outcome, {
+				prevented: true,
+				appId: 'opting-in',
+				reason: 'callee is on a do-not-disturb list',
+			});
+		});
+
+		it('drops a patch whose features are not a list', async () => {
+			const { result: outcome, warnings } = await capturingWarnings(() =>
+				runPreCallCreated([
+					mockApp('confused', {
+						[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => EventResult.patch({ features: 'audio' } as never),
+					}),
+				]),
+			);
+
+			assert.deepStrictEqual(outcome, { prevented: false, context });
+			assert.deepStrictEqual(warnings, []);
+		});
+
+		it('ignores a return value that is not an EventResult', async () => {
+			const outcome = await runPreCallCreated([
+				// Predates the EventResult protocol, or is simply not speaking it
+				mockApp('legacy', { [AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => ({ prevented: true, reason: 'not an EventResult' }) }),
+			]);
+
+			assert.deepStrictEqual(outcome, { prevented: false, context });
+		});
+
+		it('warns about and passes over an EventResult variant this event does not support', async () => {
+			const { result: outcome, warnings } = await capturingWarnings(() =>
+				runPreCallCreated([
+					mockApp('prompting', {
+						[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => EventResult.prompt({ message: 'Are you sure?' }),
+					}),
+				]),
+			);
+
+			assert.deepStrictEqual(outcome, { prevented: false, context });
+			assert.strictEqual(warnings.length, 1);
+			assert.match(warnings[0], /App prompting returned an unsupported EventResult from executePreMediaCallCreated: prompt/);
+		});
+
+		/**
+		 * The pre event is the one thing standing between an app's policy and a call
+		 * being created, so an app that fails is not passed over the way it is on the
+		 * post events: the rejection travels up to `MediaCallServer.requestCall`, which
+		 * turns it into a refused call.
+		 */
+		it('fails closed when an app handler throws', async () => {
+			await assert.rejects(
+				runPreCallCreated([
+					mockApp('failing', {
+						[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => {
+							throw new Error('app blew up');
+						},
+					}),
+				]),
+				/app blew up/,
+			);
+		});
+
+		it('fails closed when an app check throws', async () => {
+			let executed = false;
+
+			await assert.rejects(
+				runPreCallCreated([
+					mockApp('failing', {
+						[AppMethod.CHECK_PRE_MEDIA_CALL_CREATED]: () => {
+							throw new Error('check blew up');
+						},
+						[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => {
+							executed = true;
+							return EventResult.pass();
+						},
+					}),
+				]),
+				/check blew up/,
+			);
+
+			assert.strictEqual(executed, false);
+		});
 	});
 
 	describe('post media call events', () => {
+		const call: IMediaCall = {
+			id: 'call-id',
+			service: 'webrtc',
+			kind: 'direct',
+			state: 'hangup',
+			createdBy: context.caller,
+			createdAt: new Date(0),
+			caller: context.caller,
+			callee: context.callee,
+			features: ['audio'],
+			uids: ['caller-id', 'callee-id'],
+			ended: true,
+		};
+
 		const endedContext: IMediaCallEndedContext = {
-			call: {
-				id: 'call-id',
-				service: 'webrtc',
-				kind: 'direct',
-				state: 'hangup',
-				createdBy: context.caller,
-				createdAt: new Date(0),
-				caller: context.caller,
-				callee: context.callee,
-				features: ['audio'],
-				uids: ['caller-id', 'callee-id'],
-				ended: true,
-			},
+			call,
 			endedAt: new Date(0),
 			durationMs: 0,
 		};
 
-		async function triggerCallEnded(apps: ProxiedApp[]): Promise<void> {
-			await listenerManagerFor(apps).executeListener(AppInterface.IMediaCallHandler, {
-				method: AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED,
-				context: endedContext,
-			});
+		const startedContext: IMediaCallStartedContext = {
+			call: { ...call, state: 'active', ended: false },
+			startedAt: new Date(0),
+		};
+
+		const participantJoinedContext: IMediaCallParticipantJoinedContext = {
+			call: { ...call, state: 'accepted', ended: false },
+			participant: context.callee,
+			joinedAt: new Date(0),
+		};
+
+		async function triggerPostEvent(
+			apps: ProxiedApp[],
+			event: Exclude<MediaCallEvent, { method: AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED }>,
+		): Promise<void> {
+			await listenerManagerFor(apps).executeListener(AppInterface.IMediaCallHandler, event);
 
 			// Post events are dispatched without being awaited
 			await new Promise((resolve) => setImmediate(resolve));
+		}
+
+		async function triggerCallEnded(apps: ProxiedApp[]): Promise<void> {
+			return triggerPostEvent(apps, { method: AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED, context: endedContext });
 		}
 
 		it('hands the context to every app that implements the event', async () => {
@@ -239,6 +366,46 @@ describe('AppListenerManager media call events', () => {
 			]);
 
 			assert.deepStrictEqual(notified, ['logging']);
+		});
+
+		it('routes the started event to the method that handles it', async () => {
+			const notified: string[] = [];
+
+			await triggerPostEvent(
+				[
+					mockApp('logging', {
+						[AppMethod.EXECUTE_POST_MEDIA_CALL_STARTED]: (ctx: IMediaCallStartedContext) => {
+							notified.push(`started:${ctx.call.id}:${ctx.call.state}`);
+						},
+						[AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED]: () => {
+							notified.push('ended');
+						},
+					}),
+				],
+				{ method: AppMethod.EXECUTE_POST_MEDIA_CALL_STARTED, context: startedContext },
+			);
+
+			assert.deepStrictEqual(notified, ['started:call-id:active']);
+		});
+
+		it('routes the participant joined event to the method that handles it', async () => {
+			const notified: string[] = [];
+
+			await triggerPostEvent(
+				[
+					mockApp('logging', {
+						[AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED]: (ctx: IMediaCallParticipantJoinedContext) => {
+							notified.push(`joined:${ctx.participant.id}`);
+						},
+						[AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED]: () => {
+							notified.push('ended');
+						},
+					}),
+				],
+				{ method: AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED, context: participantJoinedContext },
+			);
+
+			assert.deepStrictEqual(notified, ['joined:callee-id']);
 		});
 	});
 });
