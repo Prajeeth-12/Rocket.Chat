@@ -325,9 +325,23 @@ policy callbacks (`IMediaCallServerSettings.permissionCheck` / `isFeatureAvailab
    emitter event), `executePostMediaCallEnded` (`callEnded`), plus the preventable/patchable
    `executePreMediaCallCreated` — which needed the Strategy-2 hook bus after all (`IMediaCallServer.setHooks` /
    `runPreCallCreatedHook`, consulted in `MediaCallDirector.createCall`), since a veto has to be awaited.
-   Prevention reuses the `CallRejectedError('forbidden')` contract; the app's reason is logged but not yet carried to
-   the client over the `rejected-call-request` signal. Still open from this phase: `IMediaCallRead` and the
-   `MEDIA_CALL` association.
+   Prevention reuses the `CallRejectedError('forbidden')` contract.
+
+   Deliberately left as follow-ups, so that they are not mistaken for oversights:
+
+   - **The prevention reason never reaches the caller.** `runPreMediaCallCreatedAppHook` logs it and collapses
+     `i18n` down to its `key` (`args` are dropped) because `PreCallCreatedHookResult.reason` is a plain string;
+     the client is only told `forbidden` over the `rejected-call-request` signal. Carrying the reason —
+     ideally as a structured `i18n` message — through `CallRejectedError` and that signal is its own change,
+     with its own UI decisions.
+   - **`IMediaCallRead`.** Apps can only see the calls they are handed by an event; there is no accessor for
+     reading a call by id, and so no way to answer "is this user on a call right now?".
+   - **The `MEDIA_CALL` association.** Nothing lets an app declare that it handles media calls, so the events
+     are dispatched to every app implementing `IMediaCallHandler` with no way to narrow the subscription.
+   - **`ee/packages/media-calls` has no test harness at all** — no `test` script in its `package.json` and no
+     spec files. Consequently `CallDirector`'s pre-hook branch and the `IncomingSipCall` rejection mapping are
+     covered by the Playwright suite only. Standing up mocha (or `node:test`) for that package is a
+     prerequisite for unit-testing anything further in Phase 2/3.
 2. **Phase 2 — Act.** `IMediaCallModify` action methods (`hangup`/`transfer`/`sendDTMF`) + remaining Post events
    (created/ringing/accepted/transferred/DTMF). Requires the EE engine hook bus (Strategy 2 scaffolding).
 3. **Phase 3 — Intervene.** Pre-Prevent/Modify hooks (`IPreMediaCallRequested`, `IPreMediaCallCreated`,
