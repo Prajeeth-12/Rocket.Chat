@@ -560,6 +560,96 @@ guard-before-legacy ordering.
 - **`patch` validation & allow-list drift**: the allow-list constant must be kept
   in sync with the builder surface as subjects gain fields; re-validation at
   end-of-pass is the backstop.
+- **`patch` is deliberately less expressive than the builders.** A shallow
+  `Partial<T>` merge can only express *replace this field*, while the builders
+  Modify handlers still receive (`IPreMessageSentModify.ts:26`) expose operations
+  that are structurally not merges: appends (`addAttachment`, `addBlocks`,
+  `IRoomBuilder.addUsername`, `addMemberToBeAddedByUsername`), positional edits
+  (`replaceAttachment(position, …)`, `removeAttachment(position)`), and keyed
+  inserts that reject an existing key (`addCustomField`,
+  `IMessageBuilder.ts:229`). Under `patch` an app expresses an append as
+  read-modify-write — `EventResult.patch({ attachments: [...message.attachments,
+  mine] })` — which is **correct**, because the listener loop chains strictly
+  sequentially and each app sees the accumulated subject (decision 1,
+  `AppListenerManager.ts:543`), so there is no lost-update hazard. What is lost is
+  *intent*: the server cannot distinguish "appended one attachment" from
+  "replaced the whole array", which costs audit fidelity and rules out
+  path-granular gating (e.g. permitting an append while denying a wholesale
+  overwrite, or scoping an app to its own `customFields` namespace). Two further
+  consequences: shallow merge forces whole-subtree rewrites for nested fields
+  (decision 6), and because `patch` is JSON-serialized over JSON-RPC — where
+  `JSON.stringify` drops `undefined` — it cannot express **field deletion** at
+  all. This is accepted for v1 (it matches what `Object.assign(subject, result)`
+  at `sendMessage.ts:252` already does, so Strategy B stays non-breaking), but it
+  means an app migrating `return builder.getMessage()` → `EventResult.patch(…)`
+  gives up positional operations. See
+  [Future iteration: builder-generated patches](#future-iteration-builder-generated-patches)
+  for how a later version closes this without asking authors to hand-write ops.
+
+  **v1 constraint that keeps that door open:** treat
+  `{ type: 'patch'; patch: Partial<T> }` as *one* patch **encoding**, not as the
+  definition of `patch`. The manager must branch on the patch payload's shape at
+  apply time rather than assuming `Partial<T>`, so a future
+  `{ type: 'patch'; ops: [...] }` sibling is purely additive. This costs nothing
+  now — `isEventResult()` already dispatches on `@kind` and the manager already
+  owns the apply step — but retrofitting it later would be a wire-format break.
+
+### Future iteration: builder-generated patches
+
+The limitation above is worth closing eventually, but **not** by having app
+authors hand-write RFC 6902 JSON Patch: stringly-typed JSON Pointers would forfeit
+the compile-time `Partial<T>` checking that per-event narrowing depends on
+(§"Authoring API"), and under the fail-open rule (decision 10) a single typo'd
+pointer would silently discard an app's entire patch.
+
+The tractable version is to have `EventResult.patch` **generate** the ops, so the
+authoring surface stays typed and the op encoding stays an implementation detail.
+Most of that generator already exists: `MessageBuilder`
+(`packages/apps/base-runtime/src/lib/accessors/builders/MessageBuilder.ts`) is
+already a change recorder — it keeps `private changes: Partial<IMessage>` (`:17`)
+alongside the full subject and exposes `getChanges()` (`:253`) — and it already
+demonstrates the exact intent-erasure described above: `addAttachment`,
+`setAttachments`, `replaceAttachment(position, …)` and `removeAttachment(position)`
+all collapse to a single `attachmentsChanged = true` flag (`:122`–`:164`), so
+`getChanges()` then emits the **whole array** wholesale (`:257`), and likewise for
+`customFields` (`:261`). `RoomBuilder.getChanges()` (`:182`) has the same shape.
+
+So the work is to upgrade `changes` from `Partial<T>` + two boolean flags into an
+op log, making `EventResult.patch()` approximately `builder.getPatch()`. Notable
+properties of this approach:
+
+- **No new API for app authors.** The builder methods they already call *are* the
+  declarative surface; `removeAttachment(2)` emits `remove /attachments/2`. A
+  future `unset` emits `remove /alias`, closing the deletion hole.
+- **It also fixes `ModifyUpdater`** (`:92`, `:122`), which today ships the entire
+  attachments array to the server for any single-attachment change.
+- **Rules out two tempting alternatives.** Structural diffing (`patch(before,
+  after)`) *cannot* recover the append-vs-replace distinction that is the whole
+  point, and Immer's `produceWithPatches` would mean bundling a dependency into
+  every app sandbox — `apps-engine` publishes only `definition/**` with exactly
+  one runtime dep (`uuid`), and the `base-runtime` builders are dependency-free
+  plain-object code. Mutation recording is the approach that preserves intent at
+  no dependency cost.
+- **A closed generator shrinks the server-side validator.** Hiding the authoring
+  complexity does *not* hide the consumption complexity — the manager still parses
+  paths, checks them against the allow-list, bounds-checks indices, and applies
+  ops on the hottest paths. But because the generator is the only producer, the op
+  vocabulary is a known subset: no `move`, no `copy`, no arbitrary deep pointers,
+  and paths rooted in allow-listed fields by construction. That is far less
+  validation code than conformant RFC 6902, and authors cannot emit a bad path.
+- **It resolves the legacy-mapping tension rather than worsening it.** Ops become
+  the internal normal form, and a legacy entity return (or a `Partial<T>` merge)
+  canonicalizes into one `replace` op per top-level key — a single apply path
+  serving both authoring surfaces, so §4 stays mechanical.
+- **New hazard: index staleness — conditional, not general.** Index-based ops are
+  position-dependent, but within the listener chain they are safe for the same
+  reason read-modify-write is: decision 1 feeds each app the accumulated patched
+  subject, so a later app's indices are computed against the already-patched
+  state. Staleness only arises if ops are applied somewhere other than the chain
+  step that produced them — concretely the `prompt` resume path, where the gate
+  re-runs from the top (decision 2): ops generated in the first pass and carried
+  across a suspend would be stale. The rule is **apply immediately, or regenerate
+  on resume**; a `test`-style guard would be the alternative.
 - **`prompt` scope creep**: v1 is the upload event only; message/room prompting
   needs the client send-path challenge plumbing and should be its own proposal.
 - **Precedence and `prompt` UX** across multiple apps: v1 is sequential
