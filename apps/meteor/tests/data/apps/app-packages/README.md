@@ -705,9 +705,6 @@ An app implementing every method of `IMediaCallHandler`. It records what each ha
 logs, which is how `tests/e2e/apps/media-call-events.spec.ts` asserts the events actually arrived, and it
 answers the pre-create event according to a mode the test sets beforehand.
 
-`checkPreMediaCallCreated` is deliberately **not** implemented, so installing this app also covers the
-listener manager's `JSONRPC_METHOD_NOT_FOUND` fallback for that optional method.
-
 **Mode endpoint:**
 
 - `POST /api/apps/public/:appId/mode` with `{ "mode": "pass" | "prevent" | "drop-screen-share" }`

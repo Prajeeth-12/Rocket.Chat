@@ -19,12 +19,6 @@ import { AppMethod } from '../metadata';
  */
 export interface IMediaCallHandler {
 	/**
-	 * Enables the handler to signal to the Apps framework whether this handler
-	 * should actually run for the media call about to be created.
-	 */
-	[AppMethod.CHECK_PRE_MEDIA_CALL_CREATED]?(context: IPreMediaCallCreatedContext, read: IRead, http: IHttp): Promise<boolean>;
-
-	/**
 	 * Called before a media call is created, and awaited: a slow handler delays
 	 * the call from ringing. May `pass`, `patch` the call's requested features, or
 	 * `prevent` the call from being created at all.

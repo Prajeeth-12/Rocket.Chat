@@ -175,37 +175,6 @@ describe('AppListenerManager media call events', () => {
 			assert.deepStrictEqual(outcome, { prevented: false, context: { ...context, features: ['audio', 'hold'] } });
 		});
 
-		it('does not run the handler of an app whose check opted out', async () => {
-			let executed = false;
-			const outcome = await runPreCallCreated([
-				mockApp('opting-out', {
-					[AppMethod.CHECK_PRE_MEDIA_CALL_CREATED]: () => false,
-					[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => {
-						executed = true;
-						return EventResult.prevent({ reason: 'should never run' });
-					},
-				}),
-			]);
-
-			assert.strictEqual(executed, false);
-			assert.deepStrictEqual(outcome, { prevented: false, context });
-		});
-
-		it('runs the handler of an app whose check opted in', async () => {
-			const outcome = await runPreCallCreated([
-				mockApp('opting-in', {
-					[AppMethod.CHECK_PRE_MEDIA_CALL_CREATED]: () => true,
-					[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => EventResult.prevent({ reason: 'callee is on a do-not-disturb list' }),
-				}),
-			]);
-
-			assert.deepStrictEqual(outcome, {
-				prevented: true,
-				appId: 'opting-in',
-				reason: 'callee is on a do-not-disturb list',
-			});
-		});
-
 		it('drops a patch whose features are not a list', async () => {
 			const { result: outcome, warnings } = await capturingWarnings(() =>
 				runPreCallCreated([
@@ -259,27 +228,6 @@ describe('AppListenerManager media call events', () => {
 				]),
 				/app blew up/,
 			);
-		});
-
-		it('fails closed when an app check throws', async () => {
-			let executed = false;
-
-			await assert.rejects(
-				runPreCallCreated([
-					mockApp('failing', {
-						[AppMethod.CHECK_PRE_MEDIA_CALL_CREATED]: () => {
-							throw new Error('check blew up');
-						},
-						[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => {
-							executed = true;
-							return EventResult.pass();
-						},
-					}),
-				]),
-				/check blew up/,
-			);
-
-			assert.strictEqual(executed, false);
 		});
 	});
 

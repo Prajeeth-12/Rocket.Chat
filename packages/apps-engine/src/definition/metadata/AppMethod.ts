@@ -108,7 +108,6 @@ export enum AppMethod {
 	EXECUTE_POST_USER_LOGGED_OUT = 'executePostUserLoggedOut',
 	EXECUTE_POST_USER_STATUS_CHANGED = 'executePostUserStatusChanged',
 	// Media calls
-	CHECK_PRE_MEDIA_CALL_CREATED = 'checkPreMediaCallCreated',
 	EXECUTE_PRE_MEDIA_CALL_CREATED = 'executePreMediaCallCreated',
 	EXECUTE_POST_MEDIA_CALL_STARTED = 'executePostMediaCallStarted',
 	EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED = 'executePostMediaCallParticipantJoined',

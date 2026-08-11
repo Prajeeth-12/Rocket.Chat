@@ -20,10 +20,6 @@ import { readMode } from './lib/mode';
 /**
  * Exercises every method of `IMediaCallHandler` and records what it saw in the app
  * logs, which is how the e2e spec asserts the events actually arrived.
- *
- * `checkPreMediaCallCreated` is deliberately NOT implemented, so installing this app
- * also covers the listener manager's `JSONRPC_METHOD_NOT_FOUND` fallback for the
- * optional check method.
  */
 export class MediaCallEventsTestApp extends App implements IMediaCallHandler {
 	constructor(info: IAppInfo, logger: ILogger, accessors: IAppAccessors) {

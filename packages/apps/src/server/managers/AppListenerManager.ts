@@ -1314,19 +1314,6 @@ export class AppListenerManager {
 		for (const appId of this.listeners.get(AppInterface.IMediaCallHandler)) {
 			const app = this.manager.getOneById(appId);
 
-			const continueOn = (await app.call(AppMethod.CHECK_PRE_MEDIA_CALL_CREATED, context).catch((error) => {
-				// This method is optional, so if it doesn't exist, we should continue
-				if (error?.code === JSONRPC_METHOD_NOT_FOUND) {
-					return true;
-				}
-
-				throw error;
-			})) as boolean;
-
-			if (!continueOn) {
-				continue;
-			}
-
 			const result = await app.call(AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED, context).catch((error) => {
 				// Every method of IMediaCallHandler is optional: an app may implement the
 				// interface for the post events alone
