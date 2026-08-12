@@ -335,20 +335,24 @@ describe('media call app events', () => {
 			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({
 				prevented: true,
 				reason: 'callee is on a do-not-disturb list',
+				message: { type: 'text', text: 'callee is on a do-not-disturb list' },
 			});
 			expect(loggerMock.info.callCount).to.equal(1);
 			expect(loggerMock.info.firstCall.firstArg).to.have.property('appId', 'blocking-app');
 		});
 
-		it('falls back to the i18n key when that is all the app gave as a reason', async () => {
-			// Known lossiness: the key alone crosses over, `i18n.args` is dropped
+		it('keeps the i18n key and its args, namespaced to the app that produced them', async () => {
 			triggerEvent.resolves({
 				prevented: true,
 				appId: 'blocking-app',
 				i18n: { key: 'callee_is_dnd', args: { username: 'callee' } },
 			});
 
-			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({ prevented: true, reason: 'callee_is_dnd' });
+			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({
+				prevented: true,
+				reason: 'callee_is_dnd',
+				message: { type: 'i18n', key: 'callee_is_dnd', ns: 'app-blocking-app', args: { username: 'callee' } },
+			});
 		});
 
 		it('returns the features an app patched in', async () => {

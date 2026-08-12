@@ -10,7 +10,7 @@ import type {
 import { AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
 import type { IMediaCall, MediaCallActor, MediaCallContact, ServerActor } from '@rocket.chat/core-typings';
 import type { PreCallCreatedHookParams, PreCallCreatedHookResult } from '@rocket.chat/media-calls';
-import { callFeatureList, type CallFeature } from '@rocket.chat/media-signaling';
+import { callFeatureList, type CallFeature, type CallRejectionMessage } from '@rocket.chat/media-signaling';
 import { MediaCalls } from '@rocket.chat/models';
 
 import { logger } from './logger';
@@ -138,6 +138,32 @@ export async function notifyAppsOfMediaCallEnded(callId: IMediaCall['_id']): Pro
 	}));
 }
 
+/** An app's explanation is shown in a toast, so it can't be allowed to be arbitrarily long. */
+const MAX_REJECTION_TEXT_LENGTH = 200;
+
+/**
+ * Turns what an app said about a call it blocked into something the caller can
+ * be shown. An app's translations are registered on the client under a namespace
+ * of its own, so an `i18n` key is only resolvable together with the id of the app
+ * that produced it.
+ */
+function toRejectionMessage(outcome: PreMediaCallCreatedOutcome & { prevented: true }): CallRejectionMessage | undefined {
+	if (outcome.i18n) {
+		return {
+			type: 'i18n',
+			key: outcome.i18n.key,
+			ns: `app-${outcome.appId}`,
+			...(outcome.i18n.args && { args: outcome.i18n.args }),
+		};
+	}
+
+	if (outcome.reason) {
+		return { type: 'text', text: outcome.reason.slice(0, MAX_REJECTION_TEXT_LENGTH) };
+	}
+
+	return undefined;
+}
+
 /**
  * Runs the pre-media-call-created event and translates its outcome back into
  * something the media call server understands. Apps may block the call or change
@@ -173,7 +199,11 @@ export async function runPreMediaCallCreatedAppHook(params: PreCallCreatedHookPa
 			reason: outcome.reason || outcome.i18n?.key,
 		});
 
-		return { prevented: true, reason: outcome.reason || outcome.i18n?.key };
+		return {
+			prevented: true,
+			reason: outcome.reason || outcome.i18n?.key,
+			message: toRejectionMessage(outcome),
+		};
 	}
 
 	// Apps are free to ask for features that don't exist; only the known ones move on
