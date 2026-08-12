@@ -11,6 +11,7 @@ import type { ReactNode } from 'react';
 import { useCallback, useEffect } from 'react';
 import { useTranslation } from 'react-i18next';
 
+import { useCallRejectionToast } from './useCallRejectionToast';
 import { useCallSounds } from './useCallSounds';
 import { useDesktopNotifications } from './useDesktopNotifications';
 import { useMediaSession } from './useMediaSession';
@@ -40,6 +41,7 @@ const MediaCallViewProvider = ({ children }: MediaCallViewProviderProps) => {
 	const controls = useMediaSessionControls(instance);
 
 	useDesktopNotifications(sessionState);
+	useCallRejectionToast(instance);
 
 	const setOutputMediaDevice = useSetOutputMediaDevice();
 	const setInputMediaDevice = useSetInputMediaDevice();
