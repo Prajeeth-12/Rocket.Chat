@@ -327,13 +327,17 @@ policy callbacks (`IMediaCallServerSettings.permissionCheck` / `isFeatureAvailab
    `runPreCallCreatedHook`, consulted in `MediaCallDirector.createCall`), since a veto has to be awaited.
    Prevention reuses the `CallRejectedError('forbidden')` contract.
 
+   ✅ **The prevention reason now reaches the caller**, as a toast. A `CallRejectionMessage`
+   (`packages/media-signaling/src/definition/call/common.ts`) carries either plain text or an `i18n` key with its
+   `args`, threaded through `PreCallCreatedHookResult.message` → `CallRejectedError.rejectionMessage` →
+   the `rejected-call-request` signal → the client's new `rejected` call event and `rejectedCall` session event →
+   `useCallRejectionToast` (`packages/ui-voip/src/providers/`). Apps' i18n keys resolve against the `app-${appId}`
+   namespace the client registers their translations under, and fall back to a workspace message when the key
+   doesn't resolve. The same path also explains the rejections the server was already sending on its own
+   (`Call_rejected_*` in `packages/i18n`); the protocol-level ones stay silent on purpose.
+
    Deliberately left as follow-ups, so that they are not mistaken for oversights:
 
-   - **The prevention reason never reaches the caller.** `runPreMediaCallCreatedAppHook` logs it and collapses
-     `i18n` down to its `key` (`args` are dropped) because `PreCallCreatedHookResult.reason` is a plain string;
-     the client is only told `forbidden` over the `rejected-call-request` signal. Carrying the reason —
-     ideally as a structured `i18n` message — through `CallRejectedError` and that signal is its own change,
-     with its own UI decisions.
    - **`IMediaCallRead`.** Apps can only see the calls they are handed by an event; there is no accessor for
      reading a call by id, and so no way to answer "is this user on a call right now?".
    - **The `MEDIA_CALL` association.** Nothing lets an app declare that it handles media calls, so the events
