@@ -127,10 +127,15 @@ test.describe('Apps > Media call events', () => {
 				await expect(user2.poHomeChannel.voiceCalls.widget.content).not.toBeVisible();
 			});
 
+			await test.step('the caller is told why, in the words of the app that blocked the call', async () => {
+				await user1.poHomeChannel.toastMessage.waitForDisplay({ type: 'error', message: 'blocked by media-call-events-test' });
+			});
+
+			await test.step('the callee is told nothing', async () => {
+				await expect(user2.page.locator('.rcx-toastbar--error')).not.toBeVisible();
+			});
+
 			await test.step('the app ran and saw the call it blocked', async () => {
-				// The prevention reason never reaches the UI - client-side `rejected-call-request` just
-				// flags the call as ended - so the app log is what distinguishes "blocked by the app"
-				// from "failed for some other reason".
 				const { logs } = await getAppLogs(api, appId);
 
 				const preCreated = findAppLogItem(logs, 'executePreMediaCallCreated', ['pre_created_mode', 'prevent']);
