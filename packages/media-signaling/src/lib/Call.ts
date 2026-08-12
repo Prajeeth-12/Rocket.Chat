@@ -29,6 +29,7 @@ import type {
 	ServerMediaSignal,
 	ServerMediaSignalNewCall,
 	ServerMediaSignalNotification,
+	ServerMediaSignalRejectedCallRequest,
 	ServerMediaSignalRemoteSDP,
 	ServerMediaSignalRequestOffer,
 } from '../definition/signals/server';
@@ -635,7 +636,7 @@ export class ClientMediaCall implements IClientMediaCall {
 		}
 
 		if (signalType === 'rejected-call-request') {
-			return this.flagAsEnded('remote');
+			return this.processRejection(signal);
 		}
 
 		if (!this.hasRemoteData) {
@@ -1195,6 +1196,25 @@ export class ClientMediaCall implements IClientMediaCall {
 
 		// Both sides of the call have accepted it, we can change the state now
 		this.changeState('accepted');
+	}
+
+	/**
+	 * The server refused a call request. The call ends either way, but the session
+	 * that asked for it is the only one that gets told why: the same signal reaches
+	 * every session of the user, and the others are hidden (their contract was not
+	 * the one addressed, or they never knew about this call to begin with).
+	 */
+	private processRejection(signal: ServerMediaSignalRejectedCallRequest): void {
+		this.config.logger?.debug('ClientMediaCall.processRejection', signal.reason);
+
+		if (!this.hidden) {
+			this.emitter.emit('rejected', {
+				reason: signal.reason,
+				...(signal.message && { message: signal.message }),
+			});
+		}
+
+		this.flagAsEnded('remote');
 	}
 
 	private flagAsEnded(reason: CallHangupReason): void {

@@ -13,7 +13,7 @@ import type {
 	ServerMediaSignal,
 	ServerMediaSignalRegistered,
 } from '../definition';
-import type { IClientMediaCall, CallActorType, CallContact, CallFeature, AnyMediaCallData } from '../definition/call';
+import type { IClientMediaCall, CallActorType, CallContact, CallEvents, CallFeature, AnyMediaCallData } from '../definition/call';
 import type { IMediaSignalLogger } from '../definition/logger';
 import { SessionRegistration } from './components/SessionRegistration';
 import { isSameDeviceId } from './utils/isSameDeviceId';
@@ -26,6 +26,8 @@ export type MediaSignalingEvents = {
 	hiddenCall: void;
 	registered: { activeCalls: IClientMediaCall['callId'][] };
 	outOfSync: { missingCalls: IClientMediaCall['callId'][] };
+	/** The server refused a call this session requested, and said why. Followed by 'endedCall' */
+	rejectedCall: { callId: IClientMediaCall['callId'] } & CallEvents['rejected'];
 };
 
 export type MediaSignalingSessionConfig = {
@@ -680,6 +682,7 @@ export class MediaSignalingSession extends Emitter<MediaSignalingEvents> {
 		call.emitter.on('hidden', () => this.onHiddenCall(call));
 		call.emitter.on('active', () => this.onActiveCall(call));
 		call.emitter.on('ended', () => this.onEndedCall(call));
+		call.emitter.on('rejected', (rejection) => this.onRejectedCall(call, rejection));
 		call.emitter.on('screenShareRequestChange', (requested: boolean) => this.onScreenShareRequestChange(call, requested));
 		call.emitter.on('streamChange', () => this.onSessionStateChange());
 
@@ -730,6 +733,11 @@ export class MediaSignalingSession extends Emitter<MediaSignalingEvents> {
 		this.config.logger?.debug('MediaSignalingSession.onEndedCall');
 		this.ignoreCall(call.callId);
 		this.onSessionStateChange();
+	}
+
+	private onRejectedCall(call: ClientMediaCall, rejection: CallEvents['rejected']): void {
+		this.config.logger?.debug('MediaSignalingSession.onRejectedCall', rejection.reason);
+		this.emit('rejectedCall', { callId: call.callId, ...rejection });
 	}
 
 	private onHiddenCall(_call: ClientMediaCall): void {

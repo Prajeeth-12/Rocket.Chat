@@ -1,5 +1,6 @@
 import type { ClientState } from '../client';
-import type { CallState } from './IClientMediaCall';
+import type { CallRejectedReason, CallState } from './IClientMediaCall';
+import type { CallRejectionMessage } from './common';
 
 export type CallEvents = {
 	/* Triggered when the call's server state is changed on this client, with the old state as param */
@@ -28,6 +29,9 @@ export type CallEvents = {
 
 	/* Triggered when the call's state on the server changes to 'hangup' */
 	ended: void;
+
+	/* Triggered when the server refuses a call this session requested. Always followed by 'ended' */
+	rejected: { reason: CallRejectedReason; message?: CallRejectionMessage };
 
 	/* Triggered when screen share is toggled */
 	screenShareRequestChange: boolean;
