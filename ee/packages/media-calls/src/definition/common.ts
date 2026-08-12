@@ -1,5 +1,5 @@
 import type { AtLeast, IMediaCall, IUser, MediaCallActorType, MediaCallContact, MediaCallSignedContact } from '@rocket.chat/core-typings';
-import type { CallFeature, CallRejectedReason, CallService } from '@rocket.chat/media-signaling';
+import type { CallFeature, CallRejectedReason, CallRejectionMessage, CallService } from '@rocket.chat/media-signaling';
 
 export type MinimalUserData = Pick<IUser, '_id' | 'username' | 'name' | 'freeSwitchExtension'>;
 
@@ -25,6 +25,12 @@ export class CallRejectedError extends Error {
 	constructor(
 		public readonly callRejectedReason: CallRejectedReason,
 		message?: string,
+		/**
+		 * Passed on to whoever requested the call, when there is something to tell
+		 * them beyond `callRejectedReason`. `message` is the error's own text and
+		 * stays internal.
+		 */
+		public readonly rejectionMessage?: CallRejectionMessage,
 	) {
 		super(message || 'call-rejected');
 	}

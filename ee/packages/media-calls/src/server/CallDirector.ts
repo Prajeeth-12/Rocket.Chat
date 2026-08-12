@@ -223,7 +223,7 @@ class MediaCallDirector {
 				callerType: caller.type,
 				calleeType: callee.type,
 			});
-			throw new CallRejectedError('forbidden', hookResult.reason);
+			throw new CallRejectedError('forbidden', hookResult.reason, hookResult.message);
 		}
 
 		const requestedFeatures = hookResult.features || features;
