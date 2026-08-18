@@ -1,4 +1,12 @@
-export type { IMediaCall, IMediaCallActor, IMediaCallContact, MediaCallActorType, MediaCallFeature, MediaCallState } from './IMediaCall';
+export type {
+	IMediaCall,
+	IMediaCallActor,
+	IMediaCallContact,
+	MediaCallActorType,
+	MediaCallFeature,
+	MediaCallOrigin,
+	MediaCallState,
+} from './IMediaCall';
 export type { IPreMediaCallCreatedContext, MediaCallCreatePatch } from './IPreMediaCallCreatedContext';
 export type { IMediaCallStartedContext } from './IMediaCallStartedContext';
 export type { IMediaCallParticipantJoinedContext } from './IMediaCallParticipantJoinedContext';

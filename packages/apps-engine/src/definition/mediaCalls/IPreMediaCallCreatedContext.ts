@@ -1,4 +1,4 @@
-import type { IMediaCallContact, MediaCallFeature } from './IMediaCall';
+import type { IMediaCallContact, MediaCallFeature, MediaCallOrigin } from './IMediaCall';
 
 /**
  * Context of `executePreMediaCallCreated`. The call has been routed — both
@@ -16,6 +16,11 @@ export interface IPreMediaCallCreatedContext {
 	 * not bypass workspace configuration.
 	 */
 	features: MediaCallFeature[];
+	/**
+	 * Whether the call travels over the PBX, and which side opened it. It follows
+	 * from the two contacts, so it is not patchable.
+	 */
+	origin: MediaCallOrigin;
 	/** Set when this call is replacing another one through a transfer. */
 	parentCallId?: string;
 	/**

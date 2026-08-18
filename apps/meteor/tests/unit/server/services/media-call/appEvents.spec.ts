@@ -298,6 +298,53 @@ describe('media call app events', () => {
 		});
 	});
 
+	/**
+	 * The two contact types are the whole of the origin, so the same three cases have
+	 * to come out the same way on the pre context and on the persisted call - an app
+	 * that keys on one and then the other must not see them disagree.
+	 */
+	describe('call origin', () => {
+		const user1 = { type: 'user', id: 'caller-id', username: 'caller', contractId: 'caller-contract' } as const;
+		const user2 = { type: 'user', id: 'callee-id', username: 'callee', contractId: 'callee-contract' } as const;
+		const extension = { type: 'sip', id: '1002', sipExtension: '1002', contractId: 'sip-contract' } as const;
+
+		const cases = [
+			{ origin: 'internal', caller: user1, callee: user2, description: 'a call that never leaves the workspace' },
+			{ origin: 'sip-outbound', caller: user1, callee: extension, description: 'a call placed out through the PBX' },
+			{ origin: 'sip-inbound', caller: extension, callee: user2, description: 'a call that arrived from the PBX' },
+		] as const;
+
+		cases.forEach(({ origin, caller, callee, description }) => {
+			it(`reports ${description} as ${origin} on the pre-create context`, async () => {
+				await runPreMediaCallCreatedAppHook(hookParams({ caller, callee }));
+
+				expect((dispatchedEvent().context as Record<string, any>).origin).to.equal(origin);
+			});
+
+			it(`reports ${description} as ${origin} on the call the post events carry`, async () => {
+				findOneById.resolves(makeCall({ caller, callee }));
+
+				await notifyAppsOfMediaCallEnded('call-id');
+
+				const { context } = dispatchedEvent() as { context: { call: Record<string, any> } };
+
+				expect(context.call.origin).to.equal(origin);
+			});
+		});
+
+		it('reads the origin off the contacts rather than off the service the call is carried by', async () => {
+			findOneById.resolves(makeCall({ caller: extension, callee: user2 }));
+
+			await notifyAppsOfMediaCallEnded('call-id');
+
+			const { context } = dispatchedEvent() as { context: { call: Record<string, any> } };
+
+			// `service` stays `'webrtc'` on a SIP leg too, which is why the origin is not named after it
+			expect(context.call.service).to.equal('webrtc');
+			expect(context.call.origin).to.equal('sip-inbound');
+		});
+	});
+
 	describe('post event guards', () => {
 		it('does not even load the call when the Apps-Engine is not running', async () => {
 			AppsMock.self = undefined;

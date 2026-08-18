@@ -63,6 +63,7 @@ const context: IPreMediaCallCreatedContext = {
 	callee: { type: 'user', id: 'callee-id', username: 'callee' },
 	createdBy: { type: 'user', id: 'caller-id', username: 'caller' },
 	features: ['audio'],
+	origin: 'internal',
 };
 
 async function runPreCallCreated(apps: ProxiedApp[]): Promise<PreMediaCallCreatedOutcome> {
@@ -168,7 +169,12 @@ describe('AppListenerManager media call events', () => {
 			const outcome = await runPreCallCreated([
 				mockApp('rerouting', {
 					[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () =>
-						EventResult.patch({ callee: { type: 'user', id: 'someone-else' }, features: ['audio', 'hold'] } as never),
+						EventResult.patch({
+							callee: { type: 'user', id: 'someone-else' },
+							// Follows from the contacts, so an app cannot claim the call came from elsewhere
+							origin: 'sip-inbound',
+							features: ['audio', 'hold'],
+						} as never),
 				}),
 			]);
 

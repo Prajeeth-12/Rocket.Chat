@@ -10,6 +10,14 @@ export type MediaCallActorType = 'user' | 'sip';
 export type MediaCallState = 'none' | 'ringing' | 'accepted' | 'active' | 'hangup';
 
 /**
+ * How a call reaches the outside world, and which side opened it. A call between
+ * two workspace users is `'internal'` unless the workspace routes internal calls
+ * through the PBX, in which case the leg Rocket.Chat sends out is
+ * `'sip-outbound'` like any other external call.
+ */
+export type MediaCallOrigin = 'internal' | 'sip-outbound' | 'sip-inbound';
+
+/**
  * Whoever acted on a call. `'server'` covers the transitions that have no human
  * actor behind them — expiration, internal errors and forced hangups.
  */
@@ -44,6 +52,9 @@ export interface IMediaCall {
 	service: 'webrtc';
 	kind: 'direct';
 	state: MediaCallState;
+
+	/** Whether the call travels over the PBX, and which side opened it. */
+	origin: MediaCallOrigin;
 
 	/** Who requested the call — the caller, except on transfers. */
 	createdBy: IMediaCallContact;

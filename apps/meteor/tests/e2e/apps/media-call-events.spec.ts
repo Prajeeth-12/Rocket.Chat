@@ -144,6 +144,8 @@ test.describe('Apps > Media call events', () => {
 				expect(entryValue(preCreated, 'pre_created_caller')).toBe('user1');
 				expect(entryValue(preCreated, 'pre_created_callee')).toBe('user2');
 				expect(entryValue(preCreated, 'pre_created_created_by')).toBe('user1');
+				// Two workspace users and no PBX in this workspace, so the call never leaves it
+				expect(entryValue(preCreated, 'pre_created_origin')).toBe('internal');
 			});
 
 			await test.step('the contact handed to the app carries no session credential', async () => {
@@ -222,6 +224,8 @@ test.describe('Apps > Media call events', () => {
 				expect(entryValue(started, 'post_started_call')).toBeTruthy();
 				expect(entryValue(started, 'post_started_state')).toBe('active');
 				expect(entryValue(started, 'post_started_has_started_at')).toBe('true');
+				// The pre context reported the same origin for this pair of users
+				expect(entryValue(started, 'post_started_origin')).toBe('internal');
 				expect(entryValue(started, 'post_started_features')).toContain('screen-share');
 			});
 

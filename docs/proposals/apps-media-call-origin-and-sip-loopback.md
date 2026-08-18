@@ -24,11 +24,12 @@
   on both app-facing shapes. It answers why a call reached *this* callee, not where
   the call came from, and it is absent on loop-back legs — so it narrows neither
   problem above. See [Diversion](#diversion-a-neighbouring-signal-not-a-substitute).
-- **Proposal A — `origin`** on the pre-create context and on the app-facing
-  `IMediaCall`, derived from the contact types at dispatch time. No new persisted
+- **Proposal A — `origin`** (implemented) on the pre-create context and on the
+  app-facing `IMediaCall`, derived from the contact types at dispatch time. No new persisted
   field, no migration, correct for calls already in the database.
-- **Proposal B — link the loop-back leg to the call it duplicates.** When the
-  INVITE arrives, correlate it against the still-live outbound leg, persist the
+- **Proposal B — link the loop-back leg to the call it duplicates** (rejected, not
+  feasible: the correlation cannot be made reliable from what the PBX tells us).
+  When the INVITE arrives, correlate it against the still-live outbound leg, persist the
   verdict on the inbound call as `loopbackOf`, and surface it on that leg's events.
   Both legs keep firing their events; an app that wants one conversation drops the
   leg that has `loopbackOf` set, and one that wants both can now join them.
@@ -44,12 +45,14 @@
 
 ### What changes in the shapes
 
-Two new fields on the app-facing shapes, and one new persisted field behind them:
+Two new fields on the app-facing shapes, and one new persisted field behind them.
+Only `origin` landed: `loopbackOf` and the persisted field behind it belong to
+Proposal B, which was rejected — see [Status](#status).
 
 ```diff
   // packages/apps-engine/src/definition/mediaCalls/IMediaCall.ts
 + /** How this call reaches the outside world, and which side opened it. */
-+ export type MediaCallOrigin = 'webrtc' | 'sip-outbound' | 'sip-inbound';
++ export type MediaCallOrigin = 'internal' | 'sip-outbound' | 'sip-inbound';
 
   export interface IMediaCall {
   	id: string;
@@ -109,7 +112,7 @@ A plain WebRTC call between two workspace users — one event, now labelled:
   "callee":    { "type": "user", "id": "bbb", "username": "user2" },
   "createdBy": { "type": "user", "id": "aaa", "username": "user1" },
   "features":  ["audio", "video"],
-  "origin":    "webrtc"                      // ← new
+  "origin":    "internal"                    // ← new
 }
 ```
 
@@ -187,7 +190,7 @@ fields inside `context.call` on the same rules.
 It answers a different question from `origin`. `origin` says how a call reaches the
 outside world; `divertedBy` says why it arrived at *this* callee instead of the one
 that was dialled. The two compose rather than compete: a diverted call is always
-`sip-inbound`, and `divertedBy` cannot appear on a `webrtc` or `sip-outbound` call,
+`sip-inbound`, and `divertedBy` cannot appear on an `internal` or `sip-outbound` call,
 because only an inbound INVITE carries the header. So `origin` needs no diverted
 variant — see [open question 1](#open-questions).
 
@@ -205,7 +208,23 @@ client's `transferredBy`.
 
 ## Status
 
-Draft — pending review.
+**Proposal A is implemented.** `origin` reaches apps on the pre-create context and
+on the app-facing `IMediaCall`, derived from the two contacts by `getCallOrigin`
+(`apps/meteor/server/services/media-call/appEvents.ts`). Nothing is persisted for
+it, and it is not patchable.
+
+**Proposal B is rejected — not feasible.** The link only means anything if the host
+can tell that the INVITE the PBX routed in *is* the leg it just sent out, and no
+reliable way exists to get that from the PBX. `X-RocketChat-Origin-Call-Id` survives
+only when the dialplan copies custom headers, and it is spoofable, so it can confirm
+a correlation but never establish one — see
+[Trust](#trust-the-header-is-a-confirmation-not-a-trigger). What remains is the
+caller/extension match, which labels a genuinely external call as a loop-back
+whenever an outside caller presents a workspace extension during the dial window.
+Reporting the wrong pair of calls as one conversation is worse than reporting
+neither, so `loopbackOf` is not part of the shapes: an inbound leg and the outbound
+leg it duplicates each carry their own `origin`, and nothing links them. Problem 2
+stays open.
 
 Depends on the media-call app events being in place
 (`packages/apps-engine/src/definition/mediaCalls/`, triggered from
@@ -281,6 +300,8 @@ a workspace extension); user-to-user calls then stay internal
 
 ## Proposal A — `origin` on every media-call event
 
+Implemented — see [Status](#status).
+
 ### The information already exists at dispatch time
 
 Both contacts are final before either event is built, and their types *are* the
@@ -300,8 +321,12 @@ a user callee (`IncomingSipCall.ts:431`).
 
 ```ts
 /** How this call reaches the outside world, and which side opened it. */
-export type MediaCallOrigin = 'webrtc' | 'sip-outbound' | 'sip-inbound';
+export type MediaCallOrigin = 'internal' | 'sip-outbound' | 'sip-inbound';
 ```
+
+`'internal'`, not `'webrtc'`: WebRTC carries the media of a SIP leg as well, so the
+transport does not tell an app where a call came from — which is the whole point of
+the field. `service` keeps reporting `'webrtc'`, and it keeps meaning the transport.
 
 Added to `IPreMediaCallCreatedContext`
 (`packages/apps-engine/src/definition/mediaCalls/IPreMediaCallCreatedContext.ts`)
@@ -324,7 +349,7 @@ sides:
 function getCallOrigin(caller: MediaCallContact, callee: MediaCallContact): MediaCallOrigin {
 	if (caller.type === 'sip') return 'sip-inbound';
 	if (callee.type === 'sip') return 'sip-outbound';
-	return 'webrtc';
+	return 'internal';
 }
 ```
 
@@ -350,6 +375,9 @@ why the signal is modelled as a link discovered later on the inbound leg, not as
 flag on the outbound one.
 
 ## Proposal B — recognise the loop-back leg and name the call it duplicates
+
+Rejected as not feasible — see [Status](#status). The rest of this section is kept
+as the record of what was considered.
 
 ### What is known when the INVITE arrives
 
@@ -500,18 +528,19 @@ the choke point every call creation path goes through (`CLAUDE.md`).
 - **Unit, model**: the finder's query shape.
 - **E2E**: the existing suite
   (`apps/meteor/tests/e2e/apps/media-call-events.spec.ts`) covers WebRTC calls and
-  should assert `origin === 'webrtc'` reaches the app, with no `loopbackOf`.
+  should assert `origin === 'internal'` reaches the app, with no `loopbackOf`.
   Loop-back coverage needs a PBX in CI, which the suite does not have today —
   leaving the SIP paths on unit coverage is a deliberate gap to record, not an
   oversight to hide.
 
 ## Open questions
 
-1. `origin` as a flat union, or `{ service, direction }`? Flat reads better; the
+1. **Resolved — flat union.** `origin` as a flat union, or `{ service, direction }`? Flat reads better; the
    split is easier to extend if a non-SIP provider ever lands (see §"provider
    registration" in [apps-media-call-analysis.md](./apps-media-call-analysis.md)).
    Either way the union stays three-valued: `divertedBy` already carries diversion,
-   and it only ever accompanies `sip-inbound`.
+   and it only ever accompanies `sip-inbound`. Questions 2 and 3 are moot: both are
+   about `loopbackOf`, which was not implemented.
 2. Should `loopbackOf` also be set on the **outbound** leg once the loop-back is
    recognised, pointing back at the inbound one? It would make the pair navigable
    from either end, but it is a second write to an already-ringing call and arrives

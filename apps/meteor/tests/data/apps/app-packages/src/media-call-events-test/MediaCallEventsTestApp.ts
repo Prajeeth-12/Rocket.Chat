@@ -41,6 +41,7 @@ export class MediaCallEventsTestApp extends App implements IMediaCallHandler {
 		// Proves at the real serialization boundary that no credential rode along with
 		// the contact - `contractId` is the per-session signing token the host strips.
 		this.getLogger().debug('pre_created_caller_keys', contactKeys(context.caller));
+		this.getLogger().debug('pre_created_origin', context.origin);
 
 		if (mode === 'prevent') {
 			return EventResult.prevent({ reason: 'blocked by media-call-events-test' });
@@ -58,6 +59,8 @@ export class MediaCallEventsTestApp extends App implements IMediaCallHandler {
 		this.getLogger().debug('post_started_state', context.call.state);
 		this.getLogger().debug('post_started_features', [...context.call.features].sort().join(','));
 		this.getLogger().debug('post_started_has_started_at', String(Boolean(context.startedAt)));
+		// Both shapes carry the origin, so the app can prove the pre context and the call agree
+		this.getLogger().debug('post_started_origin', context.call.origin);
 	}
 
 	public async [AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED](context: IMediaCallParticipantJoinedContext): Promise<void> {

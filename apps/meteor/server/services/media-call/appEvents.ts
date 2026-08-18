@@ -5,6 +5,7 @@ import type {
 	IMediaCallContact as IAppsMediaCallContact,
 	IPreMediaCallCreatedContext,
 	MediaCallEvent,
+	MediaCallOrigin,
 	PreMediaCallCreatedOutcome,
 } from '@rocket.chat/apps-engine/definition/mediaCalls';
 import { AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
@@ -35,6 +36,27 @@ function toAppContact(contact: MediaCallContact): IAppsMediaCallContact {
 	};
 }
 
+/**
+ * The two contacts are the origin: a sip caller means the call arrived from the
+ * PBX, a sip callee means it was placed out through it, and neither means it never
+ * leaves the workspace. Both contacts are final before any event is built, so
+ * apps do not have to reimplement the routing rules to tell the cases apart.
+ *
+ * A sip/sip pair cannot occur: an external callee requires a user caller, and an
+ * inbound INVITE requires a user callee.
+ */
+function getCallOrigin(caller: MediaCallContact, callee: MediaCallContact): MediaCallOrigin {
+	if (caller.type === 'sip') {
+		return 'sip-inbound';
+	}
+
+	if (callee.type === 'sip') {
+		return 'sip-outbound';
+	}
+
+	return 'internal';
+}
+
 function toAppActor(actor: MediaCallActor | ServerActor): IAppsMediaCallActor {
 	return {
 		type: actor.type,
@@ -48,6 +70,7 @@ function toAppMediaCall(call: IMediaCall): IAppsMediaCall {
 		service: call.service,
 		kind: call.kind,
 		state: call.state,
+		origin: getCallOrigin(call.caller, call.callee),
 		createdBy: toAppContact(call.createdBy),
 		createdAt: call.createdAt,
 		caller: toAppContact(call.caller),
@@ -181,6 +204,7 @@ export async function runPreMediaCallCreatedAppHook(params: PreCallCreatedHookPa
 		callee: toAppContact(params.callee),
 		createdBy: toAppContact(params.createdBy),
 		features: [...params.features],
+		origin: getCallOrigin(params.caller, params.callee),
 		...(params.parentCallId && { parentCallId: params.parentCallId }),
 		...(params.divertedBy && { divertedBy: toAppContact(params.divertedBy) }),
 	};
