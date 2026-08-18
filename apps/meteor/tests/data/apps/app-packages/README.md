@@ -728,6 +728,10 @@ user pair through both a passing and a prevented call.
 the contact the app received, so a test can assert the per-session signing token (`contractId`) never
 crossed into the app.
 
+A post event's context holds the call and nothing the call already holds, so the app reads the moment of the
+event and the participant that joined off the call itself: `post_started_activated_at`,
+`post_joined_participant` (`call.callee`), `post_joined_accepted_at` and `post_ended_at`.
+
 Three of the end-event labels exist to exercise the outcome helpers, since there is no separate event for
 a call nobody answered:
 
@@ -735,4 +739,4 @@ a call nobody answered:
 | --- | --- |
 | `post_ended_outcome` | `answered` \| `rejected` \| `missed`, from `isAnsweredCall` / `isRejectedCall` / `isMissedCall`. `unreachable` would mean the three stopped partitioning every ended call, and the spec asserts it never appears. |
 | `post_ended_accepted_at` | Logged **only** inside the `isAnsweredCall` branch, so its presence is the guard firing and its absence is the guard correctly refusing. |
-| `post_ended_reason_known` | `isKnownMediaCallHangupReason(context.hangupReason)`. A `false` here means `MediaCallHangupReason` has drifted from what the server records. |
+| `post_ended_reason_known` | `isKnownMediaCallHangupReason(context.call.hangupReason)`. A `false` here means `MediaCallHangupReason` has drifted from what the server records. |

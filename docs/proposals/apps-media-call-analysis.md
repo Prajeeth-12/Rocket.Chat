@@ -329,6 +329,20 @@ policy callbacks (`IMediaCallServerSettings.permissionCheck` / `isFeatureAvailab
    `runPreCallCreatedHook`, consulted in `MediaCallDirector.createCall`), since a veto has to be awaited.
    Prevention reuses the `CallRejectedError('forbidden')` contract.
 
+   Each post event's context carries the call snapshot and nothing the snapshot already holds. The moment of the
+   event is `call.activatedAt` / `call.acceptedAt` / `call.endedAt`, the participant that joined is `call.callee`,
+   and how the call ended is `call.endedBy` / `call.hangupReason` — a flat copy beside `call` would only be a
+   second place for an app to read the same value from. Each context narrows its snapshot so the timestamp it is
+   named after is a required `Date` (`IActiveMediaCall`, `IAcceptedMediaCall`, `IEndedMediaCall`). The one field
+   that stays outside is `IMediaCallEndedContext.durationMs`: the call carries the two timestamps it is computed
+   from, not the result.
+
+   The snapshot is the document the emitting update wrote, not a re-read. `callAccepted` / `callActivated` /
+   `callEnded` carry the call itself (`MediaCallServerEvents`), and the three `MediaCalls` state changes return it
+   through `findOneAndUpdate`, so the whole path from the state change to the app costs no extra query. It also
+   pins each event to the call as of its own moment: a re-read would have reported a call that ended in between
+   as `'hangup'` on the *started* event.
+
    ✅ **The prevention reason now reaches the caller**, as a toast. A `CallRejectionMessage`
    (`packages/media-signaling/src/definition/call/common.ts`) carries either plain text or an `i18n` key with its
    `args`, threaded through `PreCallCreatedHookResult.message` → `CallRejectedError.rejectionMessage` →

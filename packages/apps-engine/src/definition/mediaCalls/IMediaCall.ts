@@ -92,3 +92,16 @@ export interface IMediaCall {
 	 */
 	divertedBy?: IMediaCallContact;
 }
+
+/**
+ * A call snapshot taken once media was flowing, so `activatedAt` is set. It is
+ * the call as the update that emitted the event wrote it, not as the call stands
+ * now — a call that ended a moment later still reports the state it started in.
+ */
+export type IActiveMediaCall = Omit<IMediaCall, 'activatedAt'> & { activatedAt: Date };
+
+/** A call snapshot taken once the callee accepted, so `acceptedAt` is set. */
+export type IAcceptedMediaCall = Omit<IMediaCall, 'acceptedAt'> & { acceptedAt: Date };
+
+/** A call snapshot taken after the call ended, so `ended` and `endedAt` are set. */
+export type IEndedMediaCall = Omit<IMediaCall, 'ended' | 'endedAt'> & { ended: true; endedAt: Date };

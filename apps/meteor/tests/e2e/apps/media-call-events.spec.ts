@@ -213,7 +213,7 @@ test.describe('Apps > Media call events', () => {
 				const joined = await waitForNewAppLog(api, appId, 'executePostMediaCallParticipantJoined', previousJoined?._id);
 
 				expect(entryValue(joined, 'post_joined_participant')).toBe('user2');
-				expect(entryValue(joined, 'post_joined_has_joined_at')).toBe('true');
+				expect(entryValue(joined, 'post_joined_accepted_at')).toBeTruthy();
 				expect(entryValue(joined, 'post_joined_call')).toBeTruthy();
 				expect(entryValue(joined, 'post_joined_participant_keys')?.split(',')).not.toContain('contractId');
 			});
@@ -223,7 +223,7 @@ test.describe('Apps > Media call events', () => {
 
 				expect(entryValue(started, 'post_started_call')).toBeTruthy();
 				expect(entryValue(started, 'post_started_state')).toBe('active');
-				expect(entryValue(started, 'post_started_has_started_at')).toBe('true');
+				expect(entryValue(started, 'post_started_activated_at')).toBeTruthy();
 				// The pre context reported the same origin for this pair of users
 				expect(entryValue(started, 'post_started_origin')).toBe('internal');
 				expect(entryValue(started, 'post_started_features')).toContain('screen-share');
@@ -253,6 +253,7 @@ test.describe('Apps > Media call events', () => {
 
 			expect(entryValue(ended, 'post_ended_call')).toBeTruthy();
 			expect(entryValue(ended, 'post_ended_ended')).toBe('true');
+			expect(entryValue(ended, 'post_ended_at')).toBeTruthy();
 			expect(entryValue(ended, 'post_ended_by_type')).toBe('user');
 			expect(Number(entryValue(ended, 'post_ended_duration_ms'))).toBeGreaterThan(0);
 

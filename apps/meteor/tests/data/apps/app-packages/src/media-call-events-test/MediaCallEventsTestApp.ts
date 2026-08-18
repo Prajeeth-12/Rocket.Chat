@@ -58,25 +58,27 @@ export class MediaCallEventsTestApp extends App implements IMediaCallHandler {
 		this.getLogger().debug('post_started_call', context.call.id);
 		this.getLogger().debug('post_started_state', context.call.state);
 		this.getLogger().debug('post_started_features', [...context.call.features].sort().join(','));
-		this.getLogger().debug('post_started_has_started_at', String(Boolean(context.startedAt)));
+		this.getLogger().debug('post_started_activated_at', context.call.activatedAt.toISOString());
 		// Both shapes carry the origin, so the app can prove the pre context and the call agree
 		this.getLogger().debug('post_started_origin', context.call.origin);
 	}
 
 	public async [AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED](context: IMediaCallParticipantJoinedContext): Promise<void> {
 		this.getLogger().debug('post_joined_call', context.call.id);
-		this.getLogger().debug('post_joined_participant', context.participant.username);
-		this.getLogger().debug('post_joined_participant_keys', contactKeys(context.participant));
-		this.getLogger().debug('post_joined_has_joined_at', String(Boolean(context.joinedAt)));
+		// Calls are two-party, so the side that joined is the callee of the call itself
+		this.getLogger().debug('post_joined_participant', context.call.callee.username);
+		this.getLogger().debug('post_joined_participant_keys', contactKeys(context.call.callee));
+		this.getLogger().debug('post_joined_accepted_at', context.call.acceptedAt.toISOString());
 	}
 
 	public async [AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED](context: IMediaCallEndedContext): Promise<void> {
 		this.getLogger().debug('post_ended_call', context.call.id);
 		this.getLogger().debug('post_ended_ended', String(context.call.ended));
-		this.getLogger().debug('post_ended_by_type', context.endedBy?.type ?? 'none');
-		this.getLogger().debug('post_ended_reason', context.hangupReason ?? 'none');
+		this.getLogger().debug('post_ended_at', context.call.endedAt.toISOString());
+		this.getLogger().debug('post_ended_by_type', context.call.endedBy?.type ?? 'none');
+		this.getLogger().debug('post_ended_reason', context.call.hangupReason ?? 'none');
 		this.getLogger().debug('post_ended_duration_ms', String(context.durationMs));
-		this.getLogger().debug('post_ended_reason_known', String(isKnownMediaCallHangupReason(context.hangupReason)));
+		this.getLogger().debug('post_ended_reason_known', String(isKnownMediaCallHangupReason(context.call.hangupReason)));
 		this.getLogger().debug('post_ended_outcome', describeOutcome(context));
 
 		if (isAnsweredCall(context)) {

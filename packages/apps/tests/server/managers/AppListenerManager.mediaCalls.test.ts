@@ -252,21 +252,19 @@ describe('AppListenerManager media call events', () => {
 			ended: true,
 		};
 
+		// Each post event narrows the call to the timestamp it guarantees, and carries
+		// nothing beside it that the call already holds
 		const endedContext: IMediaCallEndedContext = {
-			call,
-			endedAt: new Date(0),
+			call: { ...call, ended: true, endedAt: new Date(0) },
 			durationMs: 0,
 		};
 
 		const startedContext: IMediaCallStartedContext = {
-			call: { ...call, state: 'active', ended: false },
-			startedAt: new Date(0),
+			call: { ...call, state: 'active', ended: false, activatedAt: new Date(0) },
 		};
 
 		const participantJoinedContext: IMediaCallParticipantJoinedContext = {
-			call: { ...call, state: 'accepted', ended: false },
-			participant: context.callee,
-			joinedAt: new Date(0),
+			call: { ...call, state: 'accepted', ended: false, acceptedAt: new Date(0) },
 		};
 
 		async function triggerPostEvent(
@@ -349,7 +347,7 @@ describe('AppListenerManager media call events', () => {
 				[
 					mockApp('logging', {
 						[AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED]: (ctx: IMediaCallParticipantJoinedContext) => {
-							notified.push(`joined:${ctx.participant.id}`);
+							notified.push(`joined:${ctx.call.callee.id}`);
 						},
 						[AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED]: () => {
 							notified.push('ended');

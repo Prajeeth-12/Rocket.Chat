@@ -5,7 +5,12 @@ import {
 	isRejectedCall,
 	mediaCallHangupReasonList,
 } from '@rocket.chat/apps-engine/definition/mediaCalls';
-import type { IMediaCallEndedContext, MediaCallEvent } from '@rocket.chat/apps-engine/definition/mediaCalls';
+import type {
+	IMediaCallEndedContext,
+	IMediaCallParticipantJoinedContext,
+	IMediaCallStartedContext,
+	MediaCallEvent,
+} from '@rocket.chat/apps-engine/definition/mediaCalls';
 import { AppInterface, AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
 import type { IMediaCall } from '@rocket.chat/core-typings';
 import type { PreCallCreatedHookParams } from '@rocket.chat/media-calls';
@@ -49,6 +54,7 @@ function makeCall(overrides: Partial<IMediaCall> = {}): IMediaCall {
 		},
 		callee: { type: 'user', id: 'callee-id', username: 'callee', contractId: 'callee-contract' },
 		ended: true,
+		endedAt: new Date('2026-01-01T10:01:00.000Z'),
 		expiresAt: new Date('2026-01-01T11:00:00.000Z'),
 		uids: ['caller-id', 'callee-id'],
 		features: ['audio'],
@@ -172,22 +178,23 @@ describe('media call app events', () => {
 
 			expect(event.method).to.equal(AppMethod.EXECUTE_POST_MEDIA_CALL_STARTED);
 			expect(event.context).to.have.nested.property('call.id', 'call-id');
-			expect((event.context as { startedAt: Date }).startedAt).to.deep.equal(activatedAt);
+			expect((event.context as IMediaCallStartedContext).call.activatedAt).to.deep.equal(activatedAt);
+			// The call carries the timestamp, so the event has nothing to add next to it
+			expect(Object.keys(event.context)).to.deep.equal(['call']);
 		});
 
-		it('falls back to the current time when the call has no activation timestamp', async () => {
-			const now = new Date('2026-01-01T10:30:00.000Z');
-			sinon.useFakeTimers({ now, toFake: ['Date'] });
+		it('warns and dispatches nothing when the call has no activation timestamp', async () => {
 			findOneById.resolves(makeCall({ activatedAt: undefined }));
 
 			await notifyAppsOfMediaCallStarted('call-id');
 
-			expect((dispatchedEvent().context as { startedAt: Date }).startedAt).to.deep.equal(now);
+			expect(triggerEvent.callCount).to.equal(0);
+			expect(loggerMock.warn.firstCall.firstArg).to.include({ callId: 'call-id', field: 'activatedAt' });
 		});
 	});
 
 	describe('notifyAppsOfMediaCallParticipantJoined', () => {
-		it('dispatches the callee as the participant that joined', async () => {
+		it('dispatches a call whose callee is the side that joined', async () => {
 			const acceptedAt = new Date('2026-01-01T10:00:03.000Z');
 			findOneById.resolves(makeCall({ state: 'accepted', ended: false, acceptedAt }));
 
@@ -197,20 +204,20 @@ describe('media call app events', () => {
 
 			expect(event.method).to.equal(AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED);
 
-			const context = event.context as { participant: Record<string, any>; joinedAt: Date; call: { callee: unknown } };
-			expect(context.participant).to.deep.equal(context.call.callee);
-			expect(context.participant).to.deep.equal({ type: 'user', id: 'callee-id', username: 'callee' });
-			expect(context.joinedAt).to.deep.equal(acceptedAt);
+			// Calls are strictly two-party, so the side that joined is always the callee
+			const { call } = event.context as IMediaCallParticipantJoinedContext;
+			expect(call.callee).to.deep.equal({ type: 'user', id: 'callee-id', username: 'callee' });
+			expect(call.acceptedAt).to.deep.equal(acceptedAt);
+			expect(Object.keys(event.context)).to.deep.equal(['call']);
 		});
 
-		it('falls back to the current time when the call has no acceptance timestamp', async () => {
-			const now = new Date('2026-01-01T10:30:00.000Z');
-			sinon.useFakeTimers({ now, toFake: ['Date'] });
+		it('warns and dispatches nothing when the call has no acceptance timestamp', async () => {
 			findOneById.resolves(makeCall({ acceptedAt: undefined }));
 
 			await notifyAppsOfMediaCallParticipantJoined('call-id');
 
-			expect((dispatchedEvent().context as { joinedAt: Date }).joinedAt).to.deep.equal(now);
+			expect(triggerEvent.callCount).to.equal(0);
+			expect(loggerMock.warn.firstCall.firstArg).to.include({ callId: 'call-id', field: 'acceptedAt' });
 		});
 	});
 
@@ -232,10 +239,12 @@ describe('media call app events', () => {
 			expect(event.method).to.equal(AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED);
 
 			const context = event.context as Record<string, any>;
-			expect(context.endedAt).to.deep.equal(endedAt);
+			expect(context.call.endedAt).to.deep.equal(endedAt);
 			// Actors are mapped down to type and id alone, so no contractId travels here either
-			expect(context.endedBy).to.deep.equal({ type: 'user', id: 'callee-id' });
-			expect(context.hangupReason).to.equal('not-answered');
+			expect(context.call.endedBy).to.deep.equal({ type: 'user', id: 'callee-id' });
+			expect(context.call.hangupReason).to.equal('not-answered');
+			// Only durationMs sits next to the call, because the call does not carry it
+			expect(Object.keys(context).sort()).to.deep.equal(['call', 'durationMs']);
 		});
 
 		it('omits endedBy and hangupReason when the call recorded neither', async () => {
@@ -245,8 +254,8 @@ describe('media call app events', () => {
 
 			const context = dispatchedEvent().context as Record<string, any>;
 
-			expect(context).to.not.have.property('endedBy');
-			expect(context).to.not.have.property('hangupReason');
+			expect(context.call).to.not.have.property('endedBy');
+			expect(context.call).to.not.have.property('hangupReason');
 		});
 
 		it('reports a server actor as the one that ended the call', async () => {
@@ -254,7 +263,16 @@ describe('media call app events', () => {
 
 			await notifyAppsOfMediaCallEnded('call-id');
 
-			expect((dispatchedEvent().context as Record<string, any>).endedBy).to.deep.equal({ type: 'server', id: 'server' });
+			expect((dispatchedEvent().context as Record<string, any>).call.endedBy).to.deep.equal({ type: 'server', id: 'server' });
+		});
+
+		it('warns and dispatches nothing when the call has no end timestamp', async () => {
+			findOneById.resolves(makeCall({ endedAt: undefined }));
+
+			await notifyAppsOfMediaCallEnded('call-id');
+
+			expect(triggerEvent.callCount).to.equal(0);
+			expect(loggerMock.warn.firstCall.firstArg).to.include({ callId: 'call-id', field: 'endedAt' });
 		});
 
 		describe('durationMs', () => {
@@ -286,14 +304,6 @@ describe('media call app events', () => {
 				});
 
 				expect(duration).to.equal(0);
-			});
-
-			it('is measured against the current time for a call with no end timestamp', async () => {
-				sinon.useFakeTimers({ now: new Date('2026-01-01T10:00:35.000Z'), toFake: ['Date'] });
-
-				const duration = await durationOf({ activatedAt: new Date('2026-01-01T10:00:05.000Z'), endedAt: undefined });
-
-				expect(duration).to.equal(30_000);
 			});
 		});
 	});
@@ -493,14 +503,10 @@ describe('media call hangup reasons', () => {
 });
 
 describe('media call outcome helpers', () => {
-	function endedContext(overrides: Partial<IMediaCallEndedContext> = {}): IMediaCallEndedContext {
-		const { call, ...rest } = overrides;
-
+	function endedContext(overrides: Partial<IMediaCallEndedContext['call']> = {}): IMediaCallEndedContext {
 		return {
-			call: { ...(makeAppCall() as IMediaCallEndedContext['call']), ...call },
-			endedAt: new Date('2026-01-01T00:01:00Z'),
+			call: { ...(makeAppCall() as IMediaCallEndedContext['call']), ...overrides },
 			durationMs: 0,
-			...rest,
 		};
 	}
 
@@ -517,14 +523,12 @@ describe('media call outcome helpers', () => {
 			features: ['audio'],
 			uids: ['caller-id', 'callee-id'],
 			ended: true,
+			endedAt: new Date('2026-01-01T00:01:00Z'),
 		};
 	}
 
 	it('reads a call the callee accepted as answered, whatever ended it', () => {
-		const context = endedContext({
-			call: { acceptedAt: new Date('2026-01-01T00:00:10Z') } as IMediaCallEndedContext['call'],
-			hangupReason: 'media-error',
-		});
+		const context = endedContext({ acceptedAt: new Date('2026-01-01T00:00:10Z'), hangupReason: 'media-error' });
 
 		expect(isAnsweredCall(context)).to.be.true;
 		expect(isMissedCall(context)).to.be.false;
@@ -551,7 +555,7 @@ describe('media call outcome helpers', () => {
 	it('puts every ended call in exactly one of the three outcomes', () => {
 		for (const hangupReason of [...mediaCallHangupReasonList, 'something-new-and-unknown']) {
 			for (const acceptedAt of [undefined, new Date('2026-01-01T00:00:10Z')]) {
-				const context = endedContext({ call: { acceptedAt } as IMediaCallEndedContext['call'], hangupReason });
+				const context = endedContext({ acceptedAt, hangupReason });
 				const matched = [isAnsweredCall(context), isRejectedCall(context), isMissedCall(context)].filter(Boolean);
 
 				expect(matched, `hangupReason: ${hangupReason}, acceptedAt: ${acceptedAt}`).to.have.lengthOf(1);

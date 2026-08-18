@@ -1,5 +1,8 @@
 import { AppEvents, Apps } from '@rocket.chat/apps';
 import type {
+	IAcceptedMediaCall as IAppsAcceptedMediaCall,
+	IActiveMediaCall as IAppsActiveMediaCall,
+	IEndedMediaCall as IAppsEndedMediaCall,
 	IMediaCall as IAppsMediaCall,
 	IMediaCallActor as IAppsMediaCallActor,
 	IMediaCallContact as IAppsMediaCallContact,
@@ -88,13 +91,46 @@ function toAppMediaCall(call: IMediaCall): IAppsMediaCall {
 	};
 }
 
-function getCallDurationInMs(call: IMediaCall): number {
-	const { activatedAt, endedAt } = call;
+/**
+ * Each post event promises the apps one timestamp on the call it carries. The
+ * event is dispatched after the write that sets it, so the timestamp is there.
+ * A call that arrives without it cannot keep the promise, and an app that acts on
+ * a made-up time is worse off than an app that never hears about the call, so the
+ * event is dropped instead.
+ */
+function getEventTimestamp(call: IMediaCall, field: 'activatedAt' | 'acceptedAt' | 'endedAt'): Date | undefined {
+	if (!call[field]) {
+		logger.warn({ msg: 'Skipped a media call event for a call that carries no timestamp for it', callId: call._id, field });
+	}
+
+	return call[field];
+}
+
+function toAppActiveMediaCall(call: IMediaCall): IAppsActiveMediaCall | undefined {
+	const activatedAt = getEventTimestamp(call, 'activatedAt');
+
+	return activatedAt && { ...toAppMediaCall(call), activatedAt };
+}
+
+function toAppAcceptedMediaCall(call: IMediaCall): IAppsAcceptedMediaCall | undefined {
+	const acceptedAt = getEventTimestamp(call, 'acceptedAt');
+
+	return acceptedAt && { ...toAppMediaCall(call), acceptedAt };
+}
+
+function toAppEndedMediaCall(call: IMediaCall): IAppsEndedMediaCall | undefined {
+	const endedAt = getEventTimestamp(call, 'endedAt');
+
+	return endedAt && { ...toAppMediaCall(call), ended: true, endedAt };
+}
+
+/** `0` for a call that never became active, and never negative. */
+function getCallDurationInMs(activatedAt: Date | undefined, endedAt: Date): number {
 	if (!activatedAt) {
 		return 0;
 	}
 
-	return Math.max(0, (endedAt?.valueOf() ?? Date.now()) - activatedAt.valueOf());
+	return Math.max(0, endedAt.valueOf() - activatedAt.valueOf());
 }
 
 function isCallFeature(feature: string): feature is CallFeature {
@@ -107,12 +143,12 @@ async function triggerMediaCallEvent(event: MediaCallEvent): Promise<unknown> {
 
 /**
  * Loads a call and dispatches one of the post events for it. Post events are
- * observational, so a call that can no longer be loaded is not an error worth
- * disrupting anything over.
+ * observational, so a call that can no longer be loaded, or that cannot carry the
+ * event, is not an error worth disrupting anything over.
  */
 async function triggerPostMediaCallEvent(
 	callId: IMediaCall['_id'],
-	getEvent: (call: IMediaCall) => Exclude<MediaCallEvent, { method: AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED }>,
+	getEvent: (call: IMediaCall) => Exclude<MediaCallEvent, { method: AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED }> | undefined,
 ): Promise<void> {
 	if (!Apps.self) {
 		return;
@@ -124,42 +160,46 @@ async function triggerPostMediaCallEvent(
 		return;
 	}
 
-	await triggerMediaCallEvent(getEvent(call));
+	const event = getEvent(call);
+	if (!event) {
+		// `getEventTimestamp` already logged what the call is missing
+		return;
+	}
+
+	await triggerMediaCallEvent(event);
 }
 
 export async function notifyAppsOfMediaCallStarted(callId: IMediaCall['_id']): Promise<void> {
-	return triggerPostMediaCallEvent(callId, (call) => ({
-		method: AppMethod.EXECUTE_POST_MEDIA_CALL_STARTED,
-		context: {
-			call: toAppMediaCall(call),
-			startedAt: call.activatedAt || new Date(),
-		},
-	}));
+	return triggerPostMediaCallEvent(callId, (call) => {
+		const activeCall = toAppActiveMediaCall(call);
+
+		return activeCall && { method: AppMethod.EXECUTE_POST_MEDIA_CALL_STARTED, context: { call: activeCall } };
+	});
 }
 
 export async function notifyAppsOfMediaCallParticipantJoined(callId: IMediaCall['_id']): Promise<void> {
-	return triggerPostMediaCallEvent(callId, (call) => ({
-		method: AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED,
-		context: {
-			call: toAppMediaCall(call),
-			// Calls are strictly two-party, so the side that joins is always the callee
-			participant: toAppContact(call.callee),
-			joinedAt: call.acceptedAt || new Date(),
-		},
-	}));
+	// Calls are strictly two-party, so the side that joins is always `call.callee`
+	return triggerPostMediaCallEvent(callId, (call) => {
+		const acceptedCall = toAppAcceptedMediaCall(call);
+
+		return acceptedCall && { method: AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED, context: { call: acceptedCall } };
+	});
 }
 
 export async function notifyAppsOfMediaCallEnded(callId: IMediaCall['_id']): Promise<void> {
-	return triggerPostMediaCallEvent(callId, (call) => ({
-		method: AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED,
-		context: {
-			call: toAppMediaCall(call),
-			endedAt: call.endedAt || new Date(),
-			...(call.endedBy && { endedBy: toAppActor(call.endedBy) }),
-			...(call.hangupReason && { hangupReason: call.hangupReason }),
-			durationMs: getCallDurationInMs(call),
-		},
-	}));
+	return triggerPostMediaCallEvent(callId, (call) => {
+		const endedCall = toAppEndedMediaCall(call);
+
+		return (
+			endedCall && {
+				method: AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED,
+				context: {
+					call: endedCall,
+					durationMs: getCallDurationInMs(call.activatedAt, endedCall.endedAt),
+				},
+			}
+		);
+	});
 }
 
 /** An app's explanation is shown in a toast, so it can't be allowed to be arbitrarily long. */

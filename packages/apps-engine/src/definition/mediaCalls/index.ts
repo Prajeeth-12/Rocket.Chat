@@ -1,4 +1,7 @@
 export type {
+	IAcceptedMediaCall,
+	IActiveMediaCall,
+	IEndedMediaCall,
 	IMediaCall,
 	IMediaCallActor,
 	IMediaCallContact,
