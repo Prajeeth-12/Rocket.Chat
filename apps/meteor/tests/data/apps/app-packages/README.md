@@ -23,22 +23,19 @@ Playwright tests use the equivalent helpers from `tests/e2e/utils/apps.ts` (`ins
 
 ## How to rebuild a package
 
-Most packages here are pre-built and have their source in a `<details>` block below. Newer ones keep their
-source under `./src/<app-name>/`, which is preferred — regenerating a zip from a real source tree beats
-copy-pasting out of markdown.
-
-To rebuild one:
+Every package here is pre-built, and its source is in a `<details>` block below. To change one, copy that
+source into a scratch app directory, edit it, and package it again:
 
 ```sh
-cd apps/meteor/tests/data/apps/app-packages/src/<app-name>
 rc-apps package                      # @rocket.chat/apps-cli
-cp dist/<app-name>_<version>.zip ../../
-rm -rf dist
+cp dist/<app-name>_<version>.zip <path to this folder>
 ```
 
-Two things to know:
+Copy the new source back into the `<details>` block, and delete the scratch directory.
 
-- The app dir **must** be inside this repo. `@rocket.chat/apps-engine` is not installed there; it resolves
+Three things to know:
+
+- The scratch dir **must** be inside this repo. `@rocket.chat/apps-engine` is not installed there; it resolves
   upward to the monorepo root `node_modules`, which is a symlink to `packages/apps-engine`. This is what lets
   a fixture typecheck against unreleased engine APIs with no install step.
 - `@rocket.chat/apps-engine/*` is left **external** in the bundle (see `external:` in
@@ -46,6 +43,8 @@ Two things to know:
   `packages/apps-engine/` (`packages/apps/deno-runtime/deno.jsonc`). So a packaged app runs against the
   *server's* engine, not a frozen copy of it — an app can call engine APIs that did not exist when it was
   packaged, and the zip does not need rebuilding when those APIs change.
+- Keep an app to a single class file. `rc-apps package` bundles the whole app into one file anyway, and one
+  file is what this document can show.
 
 ### Available apps
 
@@ -699,7 +698,6 @@ export class UiKitRoomTestApp extends App implements IUIKitInteractionHandler {
 #### Media call lifecycle events (IMediaCallHandler)
 
 File name: `media-call-events-test_0.0.1.zip`
-Source: [`./src/media-call-events-test`](./src/media-call-events-test)
 
 An app implementing every method of `IMediaCallHandler`. It records what each handler received in the app
 logs, which is how `tests/e2e/apps/media-call-events.spec.ts` asserts the events actually arrived, and it
@@ -740,3 +738,189 @@ a call nobody answered:
 | `post_ended_outcome` | `answered` \| `rejected` \| `missed`, from `isAnsweredCall` / `isRejectedCall` / `isMissedCall`. `unreachable` would mean the three stopped partitioning every ended call, and the spec asserts it never appears. |
 | `post_ended_accepted_at` | Logged **only** inside the `isAnsweredCall` branch, so its presence is the guard firing and its absence is the guard correctly refusing. |
 | `post_ended_reason_known` | `isKnownMediaCallHangupReason(context.call.hangupReason)`. A `false` here means `MediaCallHangupReason` has drifted from what the server records. |
+
+<details>
+<summary>App source code</summary>
+
+```typescript
+import { App } from '@rocket.chat/apps-engine/definition/App';
+import type {
+	IAppAccessors,
+	IConfigurationExtend,
+	IHttp,
+	ILogger,
+	IModify,
+	IPersistence,
+	IPersistenceRead,
+	IRead,
+} from '@rocket.chat/apps-engine/definition/accessors';
+import { HttpStatusCode } from '@rocket.chat/apps-engine/definition/accessors';
+import type { IApiEndpointInfo, IApiRequest, IApiResponse } from '@rocket.chat/apps-engine/definition/api';
+import { ApiEndpoint, ApiSecurity, ApiVisibility } from '@rocket.chat/apps-engine/definition/api';
+import { EventResult } from '@rocket.chat/apps-engine/definition/eventResult';
+import { isAnsweredCall, isKnownMediaCallHangupReason, isMissedCall, isRejectedCall } from '@rocket.chat/apps-engine/definition/mediaCalls';
+import type {
+	IMediaCallContact,
+	IMediaCallEndedContext,
+	IMediaCallHandler,
+	IMediaCallParticipantJoinedContext,
+	IMediaCallStartedContext,
+	IPreMediaCallCreatedContext,
+	MediaCallCreateEventResult,
+} from '@rocket.chat/apps-engine/definition/mediaCalls';
+import type { IAppInfo } from '@rocket.chat/apps-engine/definition/metadata';
+import { AppMethod, RocketChatAssociationModel, RocketChatAssociationRecord } from '@rocket.chat/apps-engine/definition/metadata';
+
+/**
+ * How the app should answer the next `executePreMediaCallCreated`. Tests set this
+ * over the `mode` endpoint before driving a call, so a single user pair can be run
+ * through every outcome instead of encoding the outcome in the callee's username.
+ */
+type Mode = 'pass' | 'prevent' | 'drop-screen-share';
+
+const MODES: Mode[] = ['pass', 'prevent', 'drop-screen-share'];
+
+const association = new RocketChatAssociationRecord(RocketChatAssociationModel.MISC, 'media-call-events-test-mode');
+
+/**
+ * Exercises every method of `IMediaCallHandler` and records what it saw in the app
+ * logs, which is how the e2e spec asserts the events actually arrived.
+ */
+export class MediaCallEventsTestApp extends App implements IMediaCallHandler {
+	constructor(info: IAppInfo, logger: ILogger, accessors: IAppAccessors) {
+		super(info, logger, accessors);
+	}
+
+	public async [AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED](
+		context: IPreMediaCallCreatedContext,
+		read: IRead,
+	): Promise<MediaCallCreateEventResult> {
+		const mode = await readMode(read.getPersistenceReader());
+
+		this.getLogger().debug('pre_created_mode', mode);
+		this.getLogger().debug('pre_created_caller', context.caller.username);
+		this.getLogger().debug('pre_created_callee', context.callee.username);
+		this.getLogger().debug('pre_created_created_by', context.createdBy.username);
+		this.getLogger().debug('pre_created_features', [...context.features].sort().join(','));
+		// Proves at the real serialization boundary that no credential rode along with
+		// the contact - `contractId` is the per-session signing token the host strips.
+		this.getLogger().debug('pre_created_caller_keys', contactKeys(context.caller));
+		this.getLogger().debug('pre_created_origin', context.origin);
+
+		if (mode === 'prevent') {
+			return EventResult.prevent({ reason: 'blocked by media-call-events-test' });
+		}
+
+		if (mode === 'drop-screen-share') {
+			return EventResult.patch({ features: context.features.filter((feature) => feature !== 'screen-share') });
+		}
+
+		return EventResult.pass();
+	}
+
+	public async [AppMethod.EXECUTE_POST_MEDIA_CALL_STARTED](context: IMediaCallStartedContext): Promise<void> {
+		this.getLogger().debug('post_started_call', context.call.id);
+		this.getLogger().debug('post_started_state', context.call.state);
+		this.getLogger().debug('post_started_features', [...context.call.features].sort().join(','));
+		this.getLogger().debug('post_started_activated_at', context.call.activatedAt.toISOString());
+		// Both shapes carry the origin, so the app can prove the pre context and the call agree
+		this.getLogger().debug('post_started_origin', context.call.origin);
+	}
+
+	public async [AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED](context: IMediaCallParticipantJoinedContext): Promise<void> {
+		this.getLogger().debug('post_joined_call', context.call.id);
+		// Calls are two-party, so the side that joined is the callee of the call itself
+		this.getLogger().debug('post_joined_participant', context.call.callee.username);
+		this.getLogger().debug('post_joined_participant_keys', contactKeys(context.call.callee));
+		this.getLogger().debug('post_joined_accepted_at', context.call.acceptedAt.toISOString());
+	}
+
+	public async [AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED](context: IMediaCallEndedContext): Promise<void> {
+		this.getLogger().debug('post_ended_call', context.call.id);
+		this.getLogger().debug('post_ended_ended', String(context.call.ended));
+		this.getLogger().debug('post_ended_at', context.call.endedAt.toISOString());
+		this.getLogger().debug('post_ended_by_type', context.call.endedBy?.type ?? 'none');
+		this.getLogger().debug('post_ended_reason', context.call.hangupReason ?? 'none');
+		this.getLogger().debug('post_ended_duration_ms', String(context.durationMs));
+		this.getLogger().debug('post_ended_reason_known', String(isKnownMediaCallHangupReason(context.call.hangupReason)));
+		this.getLogger().debug('post_ended_outcome', describeOutcome(context));
+
+		if (isAnsweredCall(context)) {
+			// The guard narrows `acceptedAt` to a required Date, so this needs no assertion.
+			this.getLogger().debug('post_ended_accepted_at', context.call.acceptedAt.toISOString());
+		}
+	}
+
+	protected override async extendConfiguration(configuration: IConfigurationExtend): Promise<void> {
+		await configuration.api.provideApi({
+			visibility: ApiVisibility.PUBLIC,
+			security: ApiSecurity.UNSECURE,
+			endpoints: [
+				/** `POST /api/apps/public/:appId/mode` with `{ "mode": "pass" | "prevent" | "drop-screen-share" }`. */
+				new (class extends ApiEndpoint {
+					public override path = 'mode';
+
+					public async post(
+						request: IApiRequest,
+						_endpoint: IApiEndpointInfo,
+						_read: IRead,
+						_modify: IModify,
+						_http: IHttp,
+						persistence: IPersistence,
+					): Promise<IApiResponse> {
+						const { mode } = (request.content || {}) as { mode?: Mode };
+
+						if (!mode || !MODES.includes(mode)) {
+							return {
+								status: HttpStatusCode.BAD_REQUEST,
+								content: { error: `mode must be one of ${MODES.join(', ')}` },
+							};
+						}
+
+						await persistence.updateByAssociation(association, { mode }, true);
+
+						return { status: HttpStatusCode.OK, content: { mode } };
+					}
+
+					public async get(_request: IApiRequest, _endpoint: IApiEndpointInfo, read: IRead): Promise<IApiResponse> {
+						return { status: HttpStatusCode.OK, content: { mode: await readMode(read.getPersistenceReader()) } };
+					}
+				})(this),
+			],
+		});
+	}
+}
+
+async function readMode(persistenceRead: IPersistenceRead): Promise<Mode> {
+	const [record] = (await persistenceRead.readByAssociation(association)) as { mode?: Mode }[];
+
+	return record?.mode ?? 'pass';
+}
+
+function contactKeys(contact: IMediaCallContact): string {
+	return Object.keys(contact).sort().join(',');
+}
+
+/**
+ * There is no event for a call nobody answered, so an app has to read the outcome
+ * off the end event. `'unreachable'` can never be logged: the three guards partition
+ * every ended call, and the e2e spec asserts the label never appears.
+ */
+function describeOutcome(context: IMediaCallEndedContext): string {
+	if (isAnsweredCall(context)) {
+		return 'answered';
+	}
+
+	if (isRejectedCall(context)) {
+		return 'rejected';
+	}
+
+	if (isMissedCall(context)) {
+		return 'missed';
+	}
+
+	return 'unreachable';
+}
+```
+
+</details>

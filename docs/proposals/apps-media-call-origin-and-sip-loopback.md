@@ -287,7 +287,7 @@ The two contexts are therefore distinguishable, just not *linkable*: every
 difference is the `user`/`sip` mirroring, which is precisely what an unrelated pair
 of real calls between the same two people would also show. An app logging usernames
 and features — including the e2e fixture app
-(`apps/meteor/tests/data/apps/app-packages/src/media-call-events-test/MediaCallEventsTestApp.ts:35-42`)
+(`media-call-events-test`, source in `apps/meteor/tests/data/apps/app-packages/README.md`)
 — sees two entries that differ only by log timestamp; an app inspecting `type`s sees
 an outbound call and an inbound call, with no way to conclude they are one
 conversation. That is the gap Proposal B closes, and it is why the fix has to be a
