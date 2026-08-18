@@ -142,63 +142,70 @@ async function triggerMediaCallEvent(event: MediaCallEvent): Promise<unknown> {
 }
 
 /**
- * Loads a call and dispatches one of the post events for it. Post events are
- * observational, so a call that can no longer be loaded, or that cannot carry the
- * event, is not an error worth disrupting anything over.
+ * Post events are observational, so a call that can no longer be loaded is not an
+ * error worth disrupting anything over. A workspace with no apps skips the read.
  */
-async function triggerPostMediaCallEvent(
-	callId: IMediaCall['_id'],
-	getEvent: (call: IMediaCall) => Exclude<MediaCallEvent, { method: AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED }> | undefined,
-): Promise<void> {
+async function findCallToReport(callId: IMediaCall['_id']): Promise<IMediaCall | undefined> {
 	if (!Apps.self) {
-		return;
+		return undefined;
 	}
 
 	const call = await MediaCalls.findOneById(callId);
 	if (!call) {
 		logger.warn({ msg: 'Unable to notify apps about a call that no longer exists', callId });
+		return undefined;
+	}
+
+	return call;
+}
+
+export async function notifyAppsOfMediaCallStarted(callId: IMediaCall['_id']): Promise<void> {
+	const call = await findCallToReport(callId);
+	if (!call) {
 		return;
 	}
 
-	const event = getEvent(call);
-	if (!event) {
+	const activeCall = toAppActiveMediaCall(call);
+	if (!activeCall) {
 		// `getEventTimestamp` already logged what the call is missing
 		return;
 	}
 
-	await triggerMediaCallEvent(event);
-}
-
-export async function notifyAppsOfMediaCallStarted(callId: IMediaCall['_id']): Promise<void> {
-	return triggerPostMediaCallEvent(callId, (call) => {
-		const activeCall = toAppActiveMediaCall(call);
-
-		return activeCall && { method: AppMethod.EXECUTE_POST_MEDIA_CALL_STARTED, context: { call: activeCall } };
-	});
+	await triggerMediaCallEvent({ method: AppMethod.EXECUTE_POST_MEDIA_CALL_STARTED, context: { call: activeCall } });
 }
 
 export async function notifyAppsOfMediaCallParticipantJoined(callId: IMediaCall['_id']): Promise<void> {
-	// Calls are strictly two-party, so the side that joins is always `call.callee`
-	return triggerPostMediaCallEvent(callId, (call) => {
-		const acceptedCall = toAppAcceptedMediaCall(call);
+	const call = await findCallToReport(callId);
+	if (!call) {
+		return;
+	}
 
-		return acceptedCall && { method: AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED, context: { call: acceptedCall } };
-	});
+	// Calls are strictly two-party, so the side that joins is always `call.callee`
+	const acceptedCall = toAppAcceptedMediaCall(call);
+	if (!acceptedCall) {
+		return;
+	}
+
+	await triggerMediaCallEvent({ method: AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED, context: { call: acceptedCall } });
 }
 
 export async function notifyAppsOfMediaCallEnded(callId: IMediaCall['_id']): Promise<void> {
-	return triggerPostMediaCallEvent(callId, (call) => {
-		const endedCall = toAppEndedMediaCall(call);
+	const call = await findCallToReport(callId);
+	if (!call) {
+		return;
+	}
 
-		return (
-			endedCall && {
-				method: AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED,
-				context: {
-					call: endedCall,
-					durationMs: getCallDurationInMs(call.activatedAt, endedCall.endedAt),
-				},
-			}
-		);
+	const endedCall = toAppEndedMediaCall(call);
+	if (!endedCall) {
+		return;
+	}
+
+	await triggerMediaCallEvent({
+		method: AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED,
+		context: {
+			call: endedCall,
+			durationMs: getCallDurationInMs(call.activatedAt, endedCall.endedAt),
+		},
 	});
 }
 
