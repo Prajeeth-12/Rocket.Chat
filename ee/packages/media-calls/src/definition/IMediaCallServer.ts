@@ -29,6 +29,7 @@ export type PreCallCreatedHookParams = {
 	createdBy: MediaCallContact;
 	features: CallFeature[];
 	parentCallId?: string;
+	divertedBy?: MediaCallContact;
 };
 
 export type PreCallCreatedHookResult =

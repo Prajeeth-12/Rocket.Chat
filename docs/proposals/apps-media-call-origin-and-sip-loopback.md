@@ -18,6 +18,12 @@
   username, the feature list), and the pre context carries no call id to compare.
   So an app can tell that *a* SIP leg is involved; it cannot tell that the two legs
   are one conversation, and has no reason to expect two.
+- **Already in place, and not a substitute — `divertedBy`.** #40560 added SIP
+  diversion (RFC 5806): the PBX names the line that forwarded the call, the host
+  persists the diverting party on the call, and this branch passes it through to apps
+  on both app-facing shapes. It answers why a call reached *this* callee, not where
+  the call came from, and it is absent on loop-back legs — so it narrows neither
+  problem above. See [Diversion](#diversion-a-neighbouring-signal-not-a-substitute).
 - **Proposal A — `origin`** on the pre-create context and on the app-facing
   `IMediaCall`, derived from the contact types at dispatch time. No new persisted
   field, no migration, correct for calls already in the database.
@@ -51,7 +57,7 @@ Two new fields on the app-facing shapes, and one new persisted field behind them
   	kind: 'direct';
   	state: MediaCallState;
 + 	origin: MediaCallOrigin;
-  	// …unchanged
+  	// …unchanged, `divertedBy` included
 + 	/**
 + 	 * Set when this call is the PBX routing one of our own outbound legs back in:
 + 	 * the id of that outbound call. Both legs are the same conversation.
@@ -68,6 +74,7 @@ Two new fields on the app-facing shapes, and one new persisted field behind them
   	createdBy: IMediaCallContact;
   	features: MediaCallFeature[];
   	parentCallId?: string;
+  	divertedBy?: IMediaCallContact;
 + 	/** Derived from the contact types; not patchable. */
 + 	origin: MediaCallOrigin;
 + 	/** The outbound call this leg loops back, when the host could correlate one. */
@@ -164,6 +171,37 @@ So `loopbackOf` present *is* the "these two are one conversation" signal, and it
 absence on an inbound call means the host found no outbound leg to attribute it to.
 The post events (`postMediaCallStarted`, `…ParticipantJoined`, `…Ended`) carry both
 fields inside `context.call` on the same rules.
+
+### Diversion: a neighbouring signal, not a substitute
+
+`divertedBy` landed after this proposal was written (#40560, the RFC 5806
+`Diversion` header) and now reaches apps on both shapes:
+
+- `IncomingSipCall.getDiversionContactFromInvite` parses the header and resolves the
+  extension to a contact (`.../sip/providers/IncomingSipCall.ts:469-497`).
+- `CallDirector.createCall` hands it to the pre-create hook and persists it on the
+  call (`.../server/CallDirector.ts:218,254`).
+- `toAppMediaCall` maps it into `context.call` for the post events
+  (`appEvents.ts:64`).
+
+It answers a different question from `origin`. `origin` says how a call reaches the
+outside world; `divertedBy` says why it arrived at *this* callee instead of the one
+that was dialled. The two compose rather than compete: a diverted call is always
+`sip-inbound`, and `divertedBy` cannot appear on a `webrtc` or `sip-outbound` call,
+because only an inbound INVITE carries the header. So `origin` needs no diverted
+variant — see [open question 1](#open-questions).
+
+It does not narrow Problem 2 either. A loop-back leg carries no `Diversion` header —
+the PBX routes our own leg back, it does not forward a line — so `divertedBy` is
+absent on exactly the calls the correlation has to recognise.
+
+One asymmetry to keep in mind when reading a diverted call.
+`getNewCallTransferredBy` returns `divertedBy` ahead of the transfer check
+(`.../server/signals/getNewCallTransferredBy.ts:5-9`), so clients label a diverted
+call as *transferred by* the diverting party. Apps get the same fact under its own
+name, and with no `parentCallId`, because no earlier call was replaced. An app that
+reconciles its own view with what the user is shown must read `divertedBy` as the
+client's `transferredBy`.
 
 ## Status
 
@@ -452,6 +490,9 @@ the choke point every call creation path goes through (`CLAUDE.md`).
   on `toAppMediaCall`; `loopbackOf` reaching the pre context when passed to the hook
   and `context.call` when persisted on the loaded call; `loopbackOf` absent (not
   `undefined`-valued) when the call has none, matching how `parentCallId` is mapped.
+  The `divertedBy` cases already in that spec are the template for the last two: they
+  cover the mapping on both shapes, the absent case, and that no `contractId` rides
+  along.
 - **Unit, correlation**: a new spec around the `processInvite` correlation with a
   stubbed model — matches the live outbound leg; ignores an ended one; ignores one
   to a different extension; still matches when the outbound leg has a
@@ -469,6 +510,8 @@ the choke point every call creation path goes through (`CLAUDE.md`).
 1. `origin` as a flat union, or `{ service, direction }`? Flat reads better; the
    split is easier to extend if a non-SIP provider ever lands (see §"provider
    registration" in [apps-media-call-analysis.md](./apps-media-call-analysis.md)).
+   Either way the union stays three-valued: `divertedBy` already carries diversion,
+   and it only ever accompanies `sip-inbound`.
 2. Should `loopbackOf` also be set on the **outbound** leg once the loop-back is
    recognised, pointing back at the inbound one? It would make the pair navigable
    from either end, but it is a second write to an already-ringing call and arrives

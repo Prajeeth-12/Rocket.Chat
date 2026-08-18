@@ -47,7 +47,9 @@ Persisted record — `IMediaCall` (`packages/core-typings/src/mediaCalls/IMediaC
 - Actors: `caller: MediaCallSignedContact`, `callee: MediaCallContact`, `createdBy: MediaCallContact` (`:41,44-45`).
   `MediaCallActorType = 'user' | 'sip'` (`:5`); `contractId` is the per-session signing token (`:7-15`).
 - Lifecycle timestamps: `acceptedAt`, `activatedAt`, `expiresAt` (`:52-57`); end fields `ended`, `endedBy`,
-  `endedAt`, `hangupReason` (`:47-50`); transfer fields `transferredBy/To/At`, `parentCallId` (`:60,63-65`).
+  `endedAt`, `hangupReason` (`:47-50`); transfer fields `transferredBy/To/At`, `parentCallId` (`:60,63-65`);
+  `divertedBy` for a call the PBX forwarded (`:68`, RFC 5806 `Diversion`) — a diversion is not a transfer and
+  carries no `parentCallId`.
 - `uids: string[]` (`:67`), `features: string[]` (`:70`) — negotiated capability set, finalized on accept.
 
 Negotiation record — `IMediaCallNegotiation` (`packages/core-typings/src/mediaCalls/IMediaCallNegotiation.ts:9-24`):

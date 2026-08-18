@@ -71,4 +71,13 @@ export interface IMediaCall {
 
 	/** Set when this call replaced another one through a transfer. */
 	parentCallId?: string;
+
+	/**
+	 * The party whose line diverted the call, when the call reached its callee
+	 * because the PBX forwarded it. A diversion is not a transfer: the call has no
+	 * `parentCallId`, because there is no earlier call it replaced. Clients label a
+	 * diverted call as transferred by this contact, so an app that reconciles what
+	 * the user sees should read it the same way.
+	 */
+	divertedBy?: IMediaCallContact;
 }

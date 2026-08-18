@@ -61,6 +61,7 @@ function toAppMediaCall(call: IMediaCall): IAppsMediaCall {
 		...(call.acceptedAt && { acceptedAt: call.acceptedAt }),
 		...(call.activatedAt && { activatedAt: call.activatedAt }),
 		...(call.parentCallId && { parentCallId: call.parentCallId }),
+		...(call.divertedBy && { divertedBy: toAppContact(call.divertedBy) }),
 	};
 }
 
@@ -181,6 +182,7 @@ export async function runPreMediaCallCreatedAppHook(params: PreCallCreatedHookPa
 		createdBy: toAppContact(params.createdBy),
 		features: [...params.features],
 		...(params.parentCallId && { parentCallId: params.parentCallId }),
+		...(params.divertedBy && { divertedBy: toAppContact(params.divertedBy) }),
 	};
 
 	const outcome = (await triggerMediaCallEvent({

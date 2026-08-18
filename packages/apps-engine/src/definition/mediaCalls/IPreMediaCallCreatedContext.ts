@@ -18,6 +18,11 @@ export interface IPreMediaCallCreatedContext {
 	features: MediaCallFeature[];
 	/** Set when this call is replacing another one through a transfer. */
 	parentCallId?: string;
+	/**
+	 * Set when the PBX forwarded the call: the party whose line diverted it. A call
+	 * screening app sees a diversion here before the call exists.
+	 */
+	divertedBy?: IMediaCallContact;
 }
 
 /**

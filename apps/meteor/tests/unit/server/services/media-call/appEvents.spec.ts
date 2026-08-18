@@ -127,6 +127,29 @@ describe('media call app events', () => {
 			});
 		});
 
+		it('maps the contact that diverted the call, and omits it when the call was not diverted', async () => {
+			findOneById.resolves(
+				makeCall({
+					divertedBy: { type: 'sip', id: '1005', displayName: 'Front Desk', sipExtension: '1005', contractId: 'diverted-by-contract' },
+				}),
+			);
+
+			await notifyAppsOfMediaCallEnded('call-id');
+
+			const { context } = dispatchedEvent() as { context: { call: Record<string, any> } };
+
+			// A diversion is not a transfer, so the call carries no parentCallId alongside it
+			expect(context.call.divertedBy).to.deep.equal({ type: 'sip', id: '1005', displayName: 'Front Desk', sipExtension: '1005' });
+			expect(context.call).to.not.have.property('parentCallId');
+
+			triggerEvent.resetHistory();
+			findOneById.resolves(makeCall());
+
+			await notifyAppsOfMediaCallEnded('call-id');
+
+			expect((dispatchedEvent().context as { call: Record<string, any> }).call).to.not.have.property('divertedBy');
+		});
+
 		it('omits the optional contact fields that are not set rather than sending them as undefined', async () => {
 			findOneById.resolves(makeCall({ callee: { type: 'sip', id: 'callee-id', contractId: 'callee-contract' } }));
 
@@ -329,6 +352,24 @@ describe('media call app events', () => {
 
 			await runPreMediaCallCreatedAppHook(hookParams());
 			expect(dispatchedEvent().context).to.not.have.property('parentCallId');
+		});
+
+		it('carries the contact that diverted the call, and omits it otherwise', async () => {
+			await runPreMediaCallCreatedAppHook(
+				hookParams({ divertedBy: { type: 'sip', id: '1005', displayName: 'Front Desk', contractId: 'diverted-by-contract' } }),
+			);
+
+			// The diverting party is a contact like any other: its contract stays behind
+			expect((dispatchedEvent().context as Record<string, any>).divertedBy).to.deep.equal({
+				type: 'sip',
+				id: '1005',
+				displayName: 'Front Desk',
+			});
+
+			triggerEvent.resetHistory();
+
+			await runPreMediaCallCreatedAppHook(hookParams());
+			expect(dispatchedEvent().context).to.not.have.property('divertedBy');
 		});
 
 		it('lets the call through when no app answered the event', async () => {
