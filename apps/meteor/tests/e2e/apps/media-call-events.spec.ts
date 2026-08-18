@@ -88,7 +88,8 @@ test.describe('Apps > Media call events', () => {
 	 */
 	test.afterEach(async () => {
 		for (const { poHomeChannel } of sessions) {
-			const { controls } = poHomeChannel.voiceCalls.widget;
+			const { widget } = poHomeChannel.voiceCalls;
+			const { controls } = widget;
 
 			for (const button of [controls.hangup, controls.cancel]) {
 				if (await button.isVisible()) {
@@ -97,6 +98,12 @@ test.describe('Apps > Media call events', () => {
 					await button.click({ timeout: 5000 }).catch(() => undefined);
 					break;
 				}
+			}
+
+			// A refused call leaves the widget up on the dialer it was opened with, and the next test
+			// cannot open a fresh one over it
+			if (await widget.content.isVisible()) {
+				await widget.btnClose.click({ timeout: 5000 }).catch(() => undefined);
 			}
 		}
 	});
@@ -122,13 +129,16 @@ test.describe('Apps > Media call events', () => {
 			// which is exactly what must not happen here.
 			await user1.poHomeChannel.voiceCalls.widget.controls.call.click();
 
-			await test.step('the caller is dropped and the callee is never rung', async () => {
-				await expect(user1.poHomeChannel.voiceCalls.widget.content).not.toBeVisible();
-				await expect(user2.poHomeChannel.voiceCalls.widget.content).not.toBeVisible();
-			});
-
 			await test.step('the caller is told why, in the words of the app that blocked the call', async () => {
 				await user1.poHomeChannel.toastMessage.waitForDisplay({ type: 'error', message: 'blocked by media-call-events-test' });
+			});
+
+			await test.step('the call never starts and the callee is never rung', async () => {
+				// The widget stays up on the dialer it was opened with, so the state to read is the
+				// controls: a call that started would offer `Cancel` instead of `Call`.
+				await expect(user1.poHomeChannel.voiceCalls.widget.controls.cancel).not.toBeVisible();
+				await expect(user1.poHomeChannel.voiceCalls.widget.controls.call).toBeVisible();
+				await expect(user2.poHomeChannel.voiceCalls.widget.content).not.toBeVisible();
 			});
 
 			await test.step('the callee is told nothing', async () => {
