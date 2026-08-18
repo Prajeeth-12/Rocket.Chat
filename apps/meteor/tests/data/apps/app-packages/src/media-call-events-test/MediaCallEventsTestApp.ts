@@ -2,6 +2,7 @@ import { App } from '@rocket.chat/apps-engine/definition/App';
 import type { IAppAccessors, IConfigurationExtend, ILogger, IRead } from '@rocket.chat/apps-engine/definition/accessors';
 import { ApiSecurity, ApiVisibility } from '@rocket.chat/apps-engine/definition/api';
 import { EventResult } from '@rocket.chat/apps-engine/definition/eventResult';
+import { isAnsweredCall, isKnownMediaCallHangupReason, isMissedCall, isRejectedCall } from '@rocket.chat/apps-engine/definition/mediaCalls';
 import type {
 	IMediaCallContact,
 	IMediaCallEndedContext,
@@ -72,6 +73,13 @@ export class MediaCallEventsTestApp extends App implements IMediaCallHandler {
 		this.getLogger().debug('post_ended_by_type', context.endedBy?.type ?? 'none');
 		this.getLogger().debug('post_ended_reason', context.hangupReason ?? 'none');
 		this.getLogger().debug('post_ended_duration_ms', String(context.durationMs));
+		this.getLogger().debug('post_ended_reason_known', String(isKnownMediaCallHangupReason(context.hangupReason)));
+		this.getLogger().debug('post_ended_outcome', describeOutcome(context));
+
+		if (isAnsweredCall(context)) {
+			// The guard narrows `acceptedAt` to a required Date, so this needs no assertion.
+			this.getLogger().debug('post_ended_accepted_at', context.call.acceptedAt.toISOString());
+		}
 	}
 
 	protected override async extendConfiguration(configuration: IConfigurationExtend): Promise<void> {
@@ -85,4 +93,25 @@ export class MediaCallEventsTestApp extends App implements IMediaCallHandler {
 
 function contactKeys(contact: IMediaCallContact): string {
 	return Object.keys(contact).sort().join(',');
+}
+
+/**
+ * There is no event for a call nobody answered, so an app has to read the outcome
+ * off the end event. `'unreachable'` can never be logged: the three guards partition
+ * every ended call, and the e2e spec asserts the label never appears.
+ */
+function describeOutcome(context: IMediaCallEndedContext): string {
+	if (isAnsweredCall(context)) {
+		return 'answered';
+	}
+
+	if (isRejectedCall(context)) {
+		return 'rejected';
+	}
+
+	if (isMissedCall(context)) {
+		return 'missed';
+	}
+
+	return 'unreachable';
 }

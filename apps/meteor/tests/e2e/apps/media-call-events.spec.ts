@@ -251,6 +251,89 @@ test.describe('Apps > Media call events', () => {
 			expect(entryValue(ended, 'post_ended_ended')).toBe('true');
 			expect(entryValue(ended, 'post_ended_by_type')).toBe('user');
 			expect(Number(entryValue(ended, 'post_ended_duration_ms'))).toBeGreaterThan(0);
+
+			await test.step('the app reads the call as answered', async () => {
+				expect(entryValue(ended, 'post_ended_outcome')).toBe('answered');
+				// Logged only inside the `isAnsweredCall` branch, so its presence is the guard firing.
+				expect(entryValue(ended, 'post_ended_accepted_at')).toBeTruthy();
+			});
+		});
+	});
+
+	/**
+	 * There is no event for a call nobody answered - an app has to read the outcome off the
+	 * end event. These drive the three outcomes through the real UI, because the thing worth
+	 * proving is that a declined call and an unanswered one do not look alike to an app.
+	 */
+	test.describe.serial('missed and rejected calls', () => {
+		test('should read a call the callee declined as rejected, not as missed', async ({ api }) => {
+			const [user1, user2] = sessions;
+
+			await setMode(api, 'pass');
+
+			const previousEnded = await getNewestAppLog(api, appId, 'executePostMediaCallEnded');
+
+			await user1.poHomeChannel.navbar.openChat('user2');
+			await expect(user1.poHomeChannel.composer.inputMessage).toBeVisible();
+
+			await user1.poHomeChannel.content.btnVoiceCall.click();
+			await user1.poHomeChannel.voiceCalls.widget.initiateCall();
+
+			// While ringing, the callee's button reads `Reject` rather than `End call`.
+			await expect(user2.poHomeChannel.voiceCalls.widget.controls.hangup).toBeVisible();
+			await user2.poHomeChannel.voiceCalls.widget.controls.hangup.click();
+
+			const ended = await waitForNewAppLog(api, appId, 'executePostMediaCallEnded', previousEnded?._id);
+
+			expect(entryValue(ended, 'post_ended_outcome')).toBe('rejected');
+			expect(entryValue(ended, 'post_ended_reason')).toBe('rejected');
+			expect(entryValue(ended, 'post_ended_duration_ms')).toBe('0');
+			// The answered branch never ran, so the guard did not narrow the wrong way.
+			expect(entryValue(ended, 'post_ended_accepted_at')).toBeUndefined();
+		});
+
+		test('should read a call nobody answered as missed', async ({ api }) => {
+			const [user1, user2] = sessions;
+
+			await setMode(api, 'pass');
+
+			const previousEnded = await getNewestAppLog(api, appId, 'executePostMediaCallEnded');
+
+			await user1.poHomeChannel.navbar.openChat('user2');
+			await expect(user1.poHomeChannel.composer.inputMessage).toBeVisible();
+
+			await user1.poHomeChannel.content.btnVoiceCall.click();
+			await user1.poHomeChannel.voiceCalls.widget.initiateCall();
+
+			// The caller gives up while it is still ringing. Waiting out the real ring timeout
+			// would take longer than a test should, and the callee misses the call either way.
+			await expect(user2.poHomeChannel.voiceCalls.widget.content).toBeVisible();
+			await user1.poHomeChannel.voiceCalls.widget.controls.cancel.click();
+
+			const ended = await waitForNewAppLog(api, appId, 'executePostMediaCallEnded', previousEnded?._id);
+
+			expect(entryValue(ended, 'post_ended_outcome')).toBe('missed');
+			expect(entryValue(ended, 'post_ended_reason')).not.toBe('rejected');
+			expect(entryValue(ended, 'post_ended_duration_ms')).toBe('0');
+			expect(entryValue(ended, 'post_ended_accepted_at')).toBeUndefined();
+		});
+
+		test('should name every reason it reports, and place every call in one outcome', async ({ api }) => {
+			const { logs } = await getAppLogs(api, appId);
+			const ended = logs.filter((log) => log.method.includes('executePostMediaCallEnded'));
+
+			expect(ended.length, 'no call ended during this run').toBeGreaterThan(0);
+
+			for (const log of ended) {
+				// `unreachable` means the three guards failed to partition an ended call.
+				expect(entryValue(log, 'post_ended_outcome')).not.toBe('unreachable');
+
+				// A reason the SDK cannot name means MediaCallHangupReason has drifted from the
+				// server. Calls that recorded no reason at all have nothing to check.
+				if (entryValue(log, 'post_ended_reason') !== 'none') {
+					expect(entryValue(log, 'post_ended_reason_known'), `unnamed reason: ${entryValue(log, 'post_ended_reason')}`).toBe('true');
+				}
+			}
 		});
 	});
 });

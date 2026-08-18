@@ -1,3 +1,5 @@
+import type { MediaCallHangupReason } from './MediaCallHangupReason';
+
 /** A media-call capability, e.g. `'audio'`, `'video'`, `'screen-share'`. */
 export type MediaCallFeature = string;
 
@@ -59,8 +61,8 @@ export interface IMediaCall {
 	ended: boolean;
 	endedAt?: Date;
 	endedBy?: IMediaCallActor;
-	/** Free-form reason recorded by whoever ended the call, e.g. `'not-answered'`, `'expired'`, `'transfer'`. */
-	hangupReason?: string;
+	/** Why the call ended. The known values are not exhaustive — see {@link MediaCallHangupReason}. */
+	hangupReason?: MediaCallHangupReason;
 
 	/** When the callee accepted the call. */
 	acceptedAt?: Date;

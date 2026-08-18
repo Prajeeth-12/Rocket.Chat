@@ -1,7 +1,15 @@
-import type { MediaCallEvent } from '@rocket.chat/apps-engine/definition/mediaCalls';
+import {
+	isAnsweredCall,
+	isKnownMediaCallHangupReason,
+	isMissedCall,
+	isRejectedCall,
+	mediaCallHangupReasonList,
+} from '@rocket.chat/apps-engine/definition/mediaCalls';
+import type { IMediaCallEndedContext, MediaCallEvent } from '@rocket.chat/apps-engine/definition/mediaCalls';
 import { AppInterface, AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
 import type { IMediaCall } from '@rocket.chat/core-typings';
 import type { PreCallCreatedHookParams } from '@rocket.chat/media-calls';
+import { callHangupReasonList } from '@rocket.chat/media-signaling';
 import { expect } from 'chai';
 import { afterEach, beforeEach, describe, it } from 'mocha';
 import proxyquire from 'proxyquire';
@@ -372,5 +380,94 @@ describe('media call app events', () => {
 
 			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({ prevented: false, features: ['audio', 'hold'] });
 		});
+	});
+});
+
+describe('media call hangup reasons', () => {
+	/**
+	 * The Apps-Engine ships the app-facing SDK on its own, so it cannot import the
+	 * internal list and keeps a copy. Nothing but this test stops the copy rotting.
+	 */
+	it('covers every reason the internal list defines', () => {
+		expect(mediaCallHangupReasonList).to.include.members([...callHangupReasonList]);
+	});
+
+	it('recognises the codes only the server writes', () => {
+		expect(isKnownMediaCallHangupReason('expired')).to.be.true;
+		expect(isKnownMediaCallHangupReason('sip-refer-failed')).to.be.true;
+		expect(isKnownMediaCallHangupReason('sip-error-486')).to.be.true;
+	});
+
+	it('rejects a reason it does not document, and an absent one', () => {
+		expect(isKnownMediaCallHangupReason('teleportation-failure')).to.be.false;
+		expect(isKnownMediaCallHangupReason(undefined)).to.be.false;
+	});
+});
+
+describe('media call outcome helpers', () => {
+	function endedContext(overrides: Partial<IMediaCallEndedContext> = {}): IMediaCallEndedContext {
+		const { call, ...rest } = overrides;
+
+		return {
+			call: { ...(makeAppCall() as IMediaCallEndedContext['call']), ...call },
+			endedAt: new Date('2026-01-01T00:01:00Z'),
+			durationMs: 0,
+			...rest,
+		};
+	}
+
+	function makeAppCall() {
+		return {
+			id: 'call-id',
+			service: 'webrtc',
+			kind: 'direct',
+			state: 'hangup',
+			createdBy: { type: 'user', id: 'caller-id' },
+			createdAt: new Date('2026-01-01T00:00:00Z'),
+			caller: { type: 'user', id: 'caller-id' },
+			callee: { type: 'user', id: 'callee-id' },
+			features: ['audio'],
+			uids: ['caller-id', 'callee-id'],
+			ended: true,
+		};
+	}
+
+	it('reads a call the callee accepted as answered, whatever ended it', () => {
+		const context = endedContext({
+			call: { acceptedAt: new Date('2026-01-01T00:00:10Z') } as IMediaCallEndedContext['call'],
+			hangupReason: 'media-error',
+		});
+
+		expect(isAnsweredCall(context)).to.be.true;
+		expect(isMissedCall(context)).to.be.false;
+		expect(isRejectedCall(context)).to.be.false;
+	});
+
+	it('reads a decline as rejected, not as missed', () => {
+		const context = endedContext({ hangupReason: 'rejected' });
+
+		expect(isRejectedCall(context)).to.be.true;
+		expect(isMissedCall(context)).to.be.false;
+		expect(isAnsweredCall(context)).to.be.false;
+	});
+
+	it('reads an unanswered call as missed whether the caller timed out or the server expired it', () => {
+		for (const hangupReason of ['not-answered', 'expired', 'unavailable', 'sip-error-408', undefined]) {
+			const context = endedContext({ hangupReason });
+
+			expect(isMissedCall(context), `hangupReason: ${hangupReason}`).to.be.true;
+			expect(isAnsweredCall(context), `hangupReason: ${hangupReason}`).to.be.false;
+		}
+	});
+
+	it('puts every ended call in exactly one of the three outcomes', () => {
+		for (const hangupReason of [...mediaCallHangupReasonList, 'something-new-and-unknown']) {
+			for (const acceptedAt of [undefined, new Date('2026-01-01T00:00:10Z')]) {
+				const context = endedContext({ call: { acceptedAt } as IMediaCallEndedContext['call'], hangupReason });
+				const matched = [isAnsweredCall(context), isRejectedCall(context), isMissedCall(context)].filter(Boolean);
+
+				expect(matched, `hangupReason: ${hangupReason}, acceptedAt: ${acceptedAt}`).to.have.lengthOf(1);
+			}
+		}
 	});
 });

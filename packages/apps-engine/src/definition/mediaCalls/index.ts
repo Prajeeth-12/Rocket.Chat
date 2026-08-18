@@ -3,6 +3,10 @@ export type { IPreMediaCallCreatedContext, MediaCallCreatePatch } from './IPreMe
 export type { IMediaCallStartedContext } from './IMediaCallStartedContext';
 export type { IMediaCallParticipantJoinedContext } from './IMediaCallParticipantJoinedContext';
 export type { IMediaCallEndedContext } from './IMediaCallEndedContext';
+export { mediaCallHangupReasonList, isKnownMediaCallHangupReason } from './MediaCallHangupReason';
+export type { MediaCallHangupReason, KnownMediaCallHangupReason } from './MediaCallHangupReason';
+export { isMissedCall, isRejectedCall, isAnsweredCall } from './helpers';
+export type { IUnansweredMediaCallEndedContext, IAnsweredMediaCallEndedContext, IRejectedMediaCallEndedContext } from './helpers';
 export type { MediaCallCreateEventResult } from './MediaCallEventResult';
 export type { IMediaCallHandler } from './IMediaCallHandler';
 export type { MediaCallEvent, PreMediaCallCreatedOutcome } from './IMediaCallEvent';
