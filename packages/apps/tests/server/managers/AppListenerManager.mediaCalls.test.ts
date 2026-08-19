@@ -194,6 +194,21 @@ describe('AppListenerManager media call events', () => {
 			assert.deepStrictEqual(warnings, []);
 		});
 
+		it('drops a patch that carries no payload, rather than failing the call over it', async () => {
+			const { result: outcome, warnings } = await capturingWarnings(() =>
+				runPreCallCreated([
+					// Hand-rolled rather than built by `EventResult.patch`: the marker is all
+					// `isEventResult` looks at, so nothing guarantees a patch underneath it
+					mockApp('marker-only', {
+						[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => ({ '@kind': EVENT_RESULT_KIND, 'type': 'patch' }),
+					}),
+				]),
+			);
+
+			assert.deepStrictEqual(outcome, { prevented: false, context });
+			assert.deepStrictEqual(warnings, ['App marker-only returned a media call patch that is not an object: undefined']);
+		});
+
 		it('ignores a return value that is not an EventResult', async () => {
 			const outcome = await runPreCallCreated([
 				// Predates the EventResult protocol, or is simply not speaking it

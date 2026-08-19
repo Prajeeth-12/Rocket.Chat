@@ -59,7 +59,10 @@ the architectural precedent for how apps-engine exposes a call-like domain.
 4. **The pre event needs a hook bus in the EE engine, not an emitter subscription.** A veto has to
    be awaited, and the emitter is fire-and-forget. `IMediaCallServer.setHooks` /
    `runPreCallCreatedHook` is consulted synchronously inside `MediaCallDirector.createCall`.
-   Prevention reuses the existing `CallRejectedError('forbidden')` contract.
+   Prevention reuses the existing `CallRejectedError('forbidden')` contract. What an app patches is
+   clamped on the way out: the features of a call with a `sip` contact are filtered to
+   `SIP_CALL_FEATURES` again (`CallDirector.ts:34-47`), because the transport decides what it can
+   carry and a patch must not put `screen-share` back on a PBX leg.
 5. **Each post-event context carries the call snapshot and nothing the snapshot already holds.** The
    moment, the participant that joined and the way the call ended are all already on the call
    (`activatedAt` / `acceptedAt` / `endedAt`, `callee`, `endedBy` / `hangupReason`); a flat copy
@@ -320,8 +323,9 @@ reporting `'webrtc'`, and it keeps meaning the transport.
 
 `origin` is added to `IPreMediaCallCreatedContext` and to the app-facing `IMediaCall`, so pre and
 post events agree. It is **not patchable**: `MediaCallCreatePatch` stays `Pick<..., 'features'>`, and
-`AppListenerManager.getMediaCallCreatePatch` (`:1365-1373`) already drops anything that is not
-`features`.
+`AppListenerManager.getMediaCallCreatePatch` (`:1371-1385`) drops anything that is not `features` —
+along with a patch that is not an object at all, since `isEventResult` checks the marker and not the
+payload under it.
 
 ### Where it is computed
 
