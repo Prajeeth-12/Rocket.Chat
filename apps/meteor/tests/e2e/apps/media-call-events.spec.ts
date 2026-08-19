@@ -5,7 +5,7 @@ import { IS_EE } from '../config/constants';
 import { createAuxContext } from '../fixtures/createAuxContext';
 import { Users } from '../fixtures/userStates';
 import { HomeChannel } from '../page-objects';
-import { setSettingValueById } from '../utils';
+import { getSettingValueById, setSettingValueById } from '../utils';
 import {
 	findAppLogItem,
 	getAppLogValue,
@@ -34,6 +34,7 @@ test.describe('Apps > Media call events', () => {
 
 	let appId: string;
 	let sessions: { page: Page; poHomeChannel: HomeChannel }[];
+	let screenSharingWasEnabled: unknown;
 
 	/**
 	 * Tells the fixture app how to answer the next `executePreMediaCallCreated`.
@@ -61,12 +62,14 @@ test.describe('Apps > Media call events', () => {
 	};
 
 	test.beforeAll(async ({ api }) => {
+		// Set rather than assumed: `screen-share` only reaches the app's feature list while this is
+		// on, and other specs turn it off for the length of their own run. The value it had is put
+		// back in `afterAll`, so this spec leaves the workspace as it found it.
+		screenSharingWasEnabled = await getSettingValueById(api, 'VoIP_TeamCollab_Screen_Sharing_Enabled');
+		await setSettingValueById(api, 'VoIP_TeamCollab_Screen_Sharing_Enabled', true);
+
 		const result = await installLocalTestPackage(appMediaCallEventsTest);
 		appId = result.app.id;
-
-		// Set rather than assumed: `screen-share` only reaches the app's feature list while this is
-		// on, and other specs turn it off for the length of their own run.
-		await setSettingValueById(api, 'VoIP_TeamCollab_Screen_Sharing_Enabled', true);
 
 		await Promise.all([
 			api.post('/users.setStatus', { status: 'online', username: 'user1' }),
@@ -108,9 +111,10 @@ test.describe('Apps > Media call events', () => {
 		}
 	});
 
-	test.afterAll(async () => {
+	test.afterAll(async ({ api }) => {
 		await Promise.all(sessions.map(({ page }) => page.close()));
 		await uninstallApp(appId);
+		await setSettingValueById(api, 'VoIP_TeamCollab_Screen_Sharing_Enabled', screenSharingWasEnabled);
 	});
 
 	test.describe.serial('pre-create decisions', () => {
