@@ -28,6 +28,10 @@ export interface IMediaCallHandler {
 	 * `patch`es are applied in turn, and the workspace's own feature rules are
 	 * applied afterwards, so a patched-in feature the workspace disallows is still
 	 * dropped.
+	 *
+	 * Throwing rejects the call, and the remaining apps are not consulted: a
+	 * handler that was asked to decide and could not is not a `pass`. Throw only
+	 * where blocking the call is the answer you want.
 	 */
 	[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]?(
 		context: IPreMediaCallCreatedContext,

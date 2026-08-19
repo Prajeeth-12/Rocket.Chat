@@ -1322,6 +1322,10 @@ export class AppListenerManager {
 					return undefined;
 				}
 
+				// Anything else fails the call rather than allowing it: an app asked to decide and
+				// could not, so there is no decision to honour. Note that this only covers what
+				// `ProxiedApp.call` lets through - a request that times out is swallowed there and
+				// arrives here as `undefined`, which allows the call. See ADR 0003.
 				throw error;
 			});
 

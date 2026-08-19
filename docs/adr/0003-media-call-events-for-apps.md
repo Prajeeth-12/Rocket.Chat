@@ -111,6 +111,18 @@ Recorded so they are not mistaken for oversights.
   events dispatch to every app implementing `IMediaCallHandler` with no way to narrow the
   subscription.
 - **The loop-back legs stay unlinked**, as decided above.
+- **The pre event fails open when the app's request times out.** `executePreMediaCallCreated`
+  rethrows the errors it sees, so an app that throws blocks the call — a policy handler that could
+  not decide must not read as `pass`. A *timed-out* request never reaches that branch:
+  `ProxiedApp.call` (`packages/apps/src/server/ProxiedApp.ts:64-85`) rethrows only
+  `AppsEngineException` and `JSONRPC_METHOD_NOT_FOUND`, and a timeout rejects with a plain `Error`
+  whose `code` is `undefined`, so both range checks are false and the method returns `undefined`
+  with nothing logged. The listener loop reads that as "no result" and the call is created.
+  This is not specific to media calls — every pre-event in the engine fails open the same way
+  (`executePreMessageSentPrevent` and the rest) — and closing it means either a call path that does
+  not swallow, or a sentinel that separates method-not-found from a swallowed failure. Left as is
+  in Phase 1 deliberately: fail-closed here means a slow app subprocess stops users from placing
+  calls, and that trade is the engine's to make once, not this event's to make alone.
 - **`ee/packages/media-calls` has no test harness at all** — no `test` script in its `package.json`
   and no spec files. `CallDirector`'s pre-hook branch and the `IncomingSipCall` rejection mapping are
   therefore covered by the Playwright suite only. Standing up mocha (or `node:test`) for that
@@ -609,7 +621,12 @@ outcomes are written as system messages via `saveCallToHistory` / `sendHistoryMe
   `isAnsweredCall` helpers.
 - Enums: `packages/apps-engine/src/definition/metadata/{AppInterface,AppMethod}.ts`.
 - Dispatch: `packages/apps/src/server/managers/AppListenerManager.ts`, covered by
-  `packages/apps/tests/server/managers/AppListenerManager.mediaCalls.test.ts`.
+  `packages/apps/tests/server/managers/AppListenerManager.mediaCalls.test.ts`. The post events are
+  the one executor in that manager that does *not* await each app in turn: nothing reads their
+  result, so `executePostMediaCallEvent` starts every handler and then awaits the set. Awaiting
+  inside the loop would let one app that stalls until its runtime timeout delay the notification of
+  every app behind it. The pre event stays serial, because `prevent` has to short-circuit and
+  `patch` has to chain.
 - Host bridge: `apps/meteor/app/apps/server/bridges/listeners.ts`.
 - Host trigger, mappers and `getCallOrigin`: `apps/meteor/server/services/media-call/appEvents.ts`,
   wired in `service.ts`; covered by
