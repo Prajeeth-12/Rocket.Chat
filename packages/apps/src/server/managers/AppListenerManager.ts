@@ -1371,18 +1371,25 @@ export class AppListenerManager {
 	private async executePostMediaCallEvent(
 		event: Exclude<MediaCallEvent, { method: AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED }>,
 	): Promise<void> {
+		const dispatched: Promise<void>[] = [];
+
 		for (const appId of this.listeners.get(AppInterface.IMediaCallHandler)) {
 			const app = this.manager.getOneById(appId);
 
-			// Nothing is waiting on these events, so one app must not keep the others
-			// from being notified - not even by not implementing the method at all
-			await app.call(event.method, event.context).catch((error) => {
-				if (error?.code === JSONRPC_METHOD_NOT_FOUND) {
-					return;
-				}
+			// Nothing is waiting on these events, so one app must not keep the others from being
+			// notified - not even by not implementing the method at all, and not by stalling until
+			// its own call times out. Every handler is started before any of them is awaited.
+			dispatched.push(
+				app.call(event.method, event.context).catch((error) => {
+					if (error?.code === JSONRPC_METHOD_NOT_FOUND) {
+						return;
+					}
 
-				console.error(`App ${appId} failed to handle ${event.method}`, error);
-			});
+					console.error(`App ${appId} failed to handle ${event.method}`, error);
+				}),
+			);
 		}
+
+		await Promise.all(dispatched);
 	}
 }

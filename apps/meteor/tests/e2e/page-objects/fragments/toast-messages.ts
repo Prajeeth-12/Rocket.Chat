@@ -10,6 +10,11 @@ export class ToastMessages {
 		error: this.page.locator('.rcx-toastbar--error'),
 	};
 
+	/** For asserting a toast is *absent*; `waitForDisplay` covers the positive case. */
+	toast(type: 'success' | 'error') {
+		return this.toastByType[type];
+	}
+
 	async dismissToast(type: 'success' | 'error' = 'success') {
 		await this.toastByType[type].last().getByRole('button', { name: 'Dismiss alert' }).click();
 		await this.page.mouse.move(0, 0);

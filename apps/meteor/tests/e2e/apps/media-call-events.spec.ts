@@ -142,7 +142,7 @@ test.describe('Apps > Media call events', () => {
 			});
 
 			await test.step('the callee is told nothing', async () => {
-				await expect(user2.page.locator('.rcx-toastbar--error')).not.toBeVisible();
+				await expect(user2.poHomeChannel.toastMessage.toast('error')).not.toBeVisible();
 			});
 
 			await test.step('the app ran and saw the call it blocked', async () => {

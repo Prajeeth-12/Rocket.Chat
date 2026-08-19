@@ -435,6 +435,19 @@ describe('media call app events', () => {
 			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({ prevented: false });
 		});
 
+		it('fails the call rather than letting it through when the event itself fails', async () => {
+			const failure = new Error('the app subprocess is gone');
+			triggerEvent.rejects(failure);
+
+			// The hook is a policy decision: an outcome nobody could produce must not read as `pass`
+			const error = await runPreMediaCallCreatedAppHook(hookParams()).then(
+				() => undefined,
+				(error: unknown) => error,
+			);
+
+			expect(error).to.equal(failure);
+		});
+
 		it('reports the reason an app prevented the call', async () => {
 			triggerEvent.resolves({ prevented: true, appId: 'blocking-app', reason: 'callee is on a do-not-disturb list' });
 
