@@ -12,8 +12,11 @@
 
 ## Status
 
-**Accepted — Phase 1 implemented.** Phases 2 to 4 (act, intervene, provide) are catalogued but not
-built. One part is rejected: linking the SIP loop-back leg to the call it duplicates. See
+**Accepted — Phase 1 implemented.** What this ADR decides is the Phase 1 surface in
+[Decision](#decision); that part is built and shipped. Phases 2 to 4 (act, intervene, provide) are
+**surveyed, not decided** — see the note at the head of
+[Follow-ups](#follow-ups--the-remaining-phases). One part is rejected: linking the SIP loop-back leg
+to the call it duplicates. See
 [Rejected — link the loop-back leg](#rejected--link-the-loop-back-leg-to-the-call-it-duplicates).
 
 - **Date:** 2026-08
@@ -93,6 +96,47 @@ the architectural precedent for how apps-engine exposes a call-like domain.
 9. **Nothing links the two legs of a SIP-routed internal call.** The correlation cannot be made
    reliable from what the PBX tells us, and a wrong link is worse than no link. Both legs fire their
    own events, each labelled with its own `origin`.
+
+### What an app receives today
+
+The three payloads the nine decisions above add up to, as an app sees them.
+
+A plain WebRTC call between two workspace users:
+
+```jsonc
+// executePreMediaCallCreated
+{
+  "caller":    { "type": "user", "id": "aaa", "username": "user1" },
+  "callee":    { "type": "user", "id": "bbb", "username": "user2" },
+  "createdBy": { "type": "user", "id": "aaa", "username": "user1" },
+  "features":  ["audio", "video"],
+  "origin":    "internal"
+}
+```
+
+The same user-to-user call with SIP integration enabled for internal calls fires
+`executePreMediaCallCreated` **twice** (decision 9), and each run is labelled but unlinked:
+
+```jsonc
+// run #1 — the leg Rocket.Chat sends to the PBX
+{ "caller": { "type": "user", "id": "aaa", "username": "user1" },
+  "callee": { "type": "sip",  "id": "1002", "username": "user2", "sipExtension": "1002" },
+  "createdBy": { "type": "user", "id": "aaa", "username": "user1" },
+  "features": ["audio"],
+  "origin": "sip-outbound" }
+
+// run #2 — the INVITE the PBX routes straight back in (same conversation)
+{ "caller": { "type": "sip",  "id": "1001", "username": "user1", "sipExtension": "1001" },
+  "callee": { "type": "user", "id": "bbb", "username": "user2" },
+  "createdBy": { "type": "sip",  "id": "1001", "username": "user1", "sipExtension": "1001" },
+  "features": ["audio"],
+  "origin": "sip-inbound" }
+```
+
+A genuinely inbound call from outside the workspace looks like run #2. That is the ambiguity
+decision 9 leaves open — why the two runs cannot be linked is
+[The open problem](#the-open-problem--one-call-two-events); how they are produced is
+[How one call becomes two](#how-one-call-becomes-two).
 
 ## Consequences
 
@@ -319,7 +363,8 @@ open problem below.
 With SIP integration enabled *for internal calls*, a single user-to-user call is created twice: once
 for the leg Rocket.Chat sends to the PBX, and once for the INVITE the PBX routes straight back in.
 An app can tell that *a* SIP leg is involved; it cannot tell that the two legs are one conversation,
-and has no reason to expect two.
+and has no reason to expect two. The two payloads are side by side under
+[What an app receives today](#what-an-app-receives-today).
 
 ### How one call becomes two
 
@@ -378,43 +423,6 @@ entries that differ only by log timestamp.
 `divertedBy` does not narrow this. A loop-back leg carries no `Diversion` header — the PBX routes our
 own leg back, it does not forward a line — so `divertedBy` is absent on exactly the calls a
 correlation would have to recognise.
-
-### What an app receives today
-
-A plain WebRTC call between two workspace users:
-
-```jsonc
-// executePreMediaCallCreated
-{
-  "caller":    { "type": "user", "id": "aaa", "username": "user1" },
-  "callee":    { "type": "user", "id": "bbb", "username": "user2" },
-  "createdBy": { "type": "user", "id": "aaa", "username": "user1" },
-  "features":  ["audio", "video"],
-  "origin":    "internal"
-}
-```
-
-The same user-to-user call with SIP integration enabled for internal calls fires
-`executePreMediaCallCreated` **twice**, and each run is labelled but unlinked:
-
-```jsonc
-// run #1 — the leg Rocket.Chat sends to the PBX
-{ "caller": { "type": "user", "id": "aaa", "username": "user1" },
-  "callee": { "type": "sip",  "id": "1002", "username": "user2", "sipExtension": "1002" },
-  "createdBy": { "type": "user", "id": "aaa", "username": "user1" },
-  "features": ["audio"],
-  "origin": "sip-outbound" }
-
-// run #2 — the INVITE the PBX routes straight back in (same conversation)
-{ "caller": { "type": "sip",  "id": "1001", "username": "user1", "sipExtension": "1001" },
-  "callee": { "type": "user", "id": "bbb", "username": "user2" },
-  "createdBy": { "type": "sip",  "id": "1001", "username": "user1", "sipExtension": "1001" },
-  "features": ["audio"],
-  "origin": "sip-inbound" }
-```
-
-A genuinely inbound call from outside the workspace looks like run #2 — which is exactly the
-ambiguity that stays open.
 
 ## Alternatives considered
 
@@ -524,6 +532,18 @@ are supplied by the app runtime. A media-call event that needed a builder or an 
 message Modify and Extend events get one — would be new work, not a step here.
 
 ## Follow-ups — the remaining phases
+
+> **Nothing below this heading is decided.** This section is a survey, not a plan: the phases, the
+> interface names, the proposed accessor surfaces and the "worked recipes" are sketches recorded so
+> the next person starts from the reconnaissance rather than repeating it. Treat every shape here as
+> a suggestion open to redesign, and every insertion point as a *candidate* that still has to be
+> re-checked against the code when the work is actually picked up. No phase is scheduled and none is
+> a commitment of this ADR.
+>
+> Two things here are firmer than the rest, and are flagged where they appear: the constraint that
+> nothing may write `IMediaCall` fields around the guarded model layer, and
+> [Adjacent surfaces](#adjacent-surfaces--already-generic-usable-today), which documents capabilities
+> that already exist today rather than proposing new ones.
 
 ### Phase 2 — Act
 

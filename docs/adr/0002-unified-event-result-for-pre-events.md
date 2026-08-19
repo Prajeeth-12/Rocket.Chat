@@ -383,6 +383,12 @@ widened handlers accept legacy shapes behind the guard-before-legacy ordering.
 
 ## Follow-ups
 
+> **Nothing below this heading is decided.** These are open problems and candidate answers,
+> recorded so the analysis is not redone: the op-log encoding, the builder-generated patches and
+> the `prompt` design are sketches, and where an item says a future implementation "must" do
+> something, read it as the constraint that sketch depends on, not as a rule the current code
+> already follows. Item 4 is the one with a named first consumer, and even that is unscheduled.
+
 1. **`patch` allow-list drift.** The allow-list constant must stay in sync with the builder surface
    as subjects gain fields; re-validation at end-of-pass is the backstop.
 2. **`patch` cannot express intent, appends, positional edits or deletion.** A shallow `Partial<T>`
