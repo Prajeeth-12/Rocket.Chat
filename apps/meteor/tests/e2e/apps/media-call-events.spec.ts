@@ -204,7 +204,7 @@ test.describe('Apps > Media call events', () => {
 				expect(entryValue(started, 'post_started_features')).not.toContain('screen-share');
 			});
 
-			await user2.poHomeChannel.voiceCalls.widget.endCall();
+			await user2.poHomeChannel.voiceCalls.widget.hangup();
 		});
 	});
 
@@ -239,7 +239,7 @@ test.describe('Apps > Media call events', () => {
 				expect(entryValue(started, 'post_started_features')).toContain('screen-share');
 			});
 
-			await user2.poHomeChannel.voiceCalls.widget.endCall();
+			await user2.poHomeChannel.voiceCalls.widget.hangup();
 		});
 
 		test('should notify the app when a call ends, with who ended it and how long it ran', async ({ api }) => {
@@ -257,7 +257,7 @@ test.describe('Apps > Media call events', () => {
 			await waitForNewAppLog(api, appId, 'executePostMediaCallStarted', previousStarted?._id);
 			await expect.poll(() => user2.poHomeChannel.voiceCalls.widget.getTimerContentInSeconds()).toBeGreaterThanOrEqual(1);
 
-			await user2.poHomeChannel.voiceCalls.widget.endCall();
+			await user2.poHomeChannel.voiceCalls.widget.hangup();
 
 			const ended = await waitForNewAppLog(api, appId, 'executePostMediaCallEnded', previousEnded?._id);
 
