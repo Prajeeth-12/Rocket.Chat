@@ -1,4 +1,5 @@
 import type { IEmailDescriptor, IPreEmailSentContext } from '@rocket.chat/apps-engine/definition/email';
+import type { MarkedEventResult } from '@rocket.chat/apps-engine/definition/eventResult';
 import { isEventResult } from '@rocket.chat/apps-engine/definition/eventResult';
 import { EssentialAppDisabledException } from '@rocket.chat/apps-engine/definition/exceptions';
 import type { IExternalComponent } from '@rocket.chat/apps-engine/definition/externalComponent';
@@ -1342,7 +1343,14 @@ export class AppListenerManager {
 				case 'pass':
 					break;
 				default:
-					console.warn(`App ${appId} returned an unsupported EventResult from ${AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED}: ${result.type}`);
+					// Unreachable for a well-formed app: the cases above cover every variant
+					// the type declares. It still has to fail open, because what arrives here
+					// is a JSON-RPC payload the types never got to check.
+					console.warn(
+						`App ${appId} returned an unsupported EventResult from ${AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED}: ${
+							(result as MarkedEventResult).type
+						}`,
+					);
 			}
 		}
 

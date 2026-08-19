@@ -1,7 +1,7 @@
 import * as assert from 'node:assert';
 import { describe, it } from 'node:test';
 
-import { EventResult } from '@rocket.chat/apps-engine/definition/eventResult';
+import { EVENT_RESULT_KIND, EventResult } from '@rocket.chat/apps-engine/definition/eventResult';
 import type {
 	IMediaCall,
 	IMediaCallEndedContext,
@@ -203,11 +203,19 @@ describe('AppListenerManager media call events', () => {
 			assert.deepStrictEqual(outcome, { prevented: false, context });
 		});
 
+		/**
+		 * The static types forbid this, so it only arrives from a bug or a tampered
+		 * JSON-RPC payload — hence the hand-built marker instead of a factory call.
+		 */
 		it('warns about and passes over an EventResult variant this event does not support', async () => {
 			const { result: outcome, warnings } = await capturingWarnings(() =>
 				runPreCallCreated([
 					mockApp('prompting', {
-						[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => EventResult.prompt({ message: 'Are you sure?' }),
+						[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => ({
+							'@kind': EVENT_RESULT_KIND,
+							'type': 'prompt',
+							'message': 'Are you sure?',
+						}),
 					}),
 				]),
 			);
