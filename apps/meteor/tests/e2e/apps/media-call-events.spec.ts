@@ -91,7 +91,7 @@ test.describe('Apps > Media call events', () => {
 			const { widget } = poHomeChannel.voiceCalls;
 			const { controls } = widget;
 
-			for (const button of [controls.hangup, controls.cancel]) {
+			for (const button of [controls.hangup, controls.cancel, controls.reject]) {
 				if (await button.isVisible()) {
 					// The opposite side's widget may be closing at this very moment; cleanup must not
 					// turn a passing test into a failing one
@@ -295,8 +295,8 @@ test.describe('Apps > Media call events', () => {
 			await user1.poHomeChannel.voiceCalls.widget.initiateCall();
 
 			// While ringing, the callee's button reads `Reject` rather than `End call`.
-			await expect(user2.poHomeChannel.voiceCalls.widget.controls.hangup).toBeVisible();
-			await user2.poHomeChannel.voiceCalls.widget.controls.hangup.click();
+			await expect(user2.poHomeChannel.voiceCalls.widget.controls.reject).toBeVisible();
+			await user2.poHomeChannel.voiceCalls.widget.reject();
 
 			const ended = await waitForNewAppLog(api, appId, 'executePostMediaCallEnded', previousEnded?._id);
 
