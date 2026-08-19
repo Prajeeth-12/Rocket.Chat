@@ -1,4 +1,4 @@
-import type { IUser, MediaCallContact } from '@rocket.chat/core-typings';
+import type { IMediaCall, IUser, MediaCallContact } from '@rocket.chat/core-typings';
 import type { Emitter } from '@rocket.chat/emitter';
 import type {
 	CallFeature,
@@ -15,9 +15,14 @@ export type VoipPushNotificationEventType = 'new' | 'answer' | 'end';
 
 export type MediaCallServerEvents = {
 	callUpdated: { callId: string; dtmf?: ClientMediaSignalBody<'dtmf'> };
-	callAccepted: { callId: string; uids: IUser['_id'][] };
-	callActivated: { callId: string; uids: IUser['_id'][] };
-	callEnded: { callId: string; uids: IUser['_id'][] };
+	/**
+	 * The three lifecycle events carry the call as it was when the transition happened, not just
+	 * its id: a listener that reads the call again may already see a later transition, and would
+	 * then describe the wrong thing.
+	 */
+	callAccepted: { call: IMediaCall };
+	callActivated: { call: IMediaCall };
+	callEnded: { call: IMediaCall };
 	signalRequest: { toUid: IUser['_id']; signal: ServerMediaSignal };
 	historyUpdate: { callId: string };
 	pushNotificationRequest: { callId: string; event: VoipPushNotificationEventType };

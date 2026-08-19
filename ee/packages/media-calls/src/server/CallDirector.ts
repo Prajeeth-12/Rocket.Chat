@@ -13,6 +13,7 @@ import type { InsertionModel } from '@rocket.chat/model-typings';
 import { MediaCallNegotiations, MediaCalls } from '@rocket.chat/models';
 
 import { getCastDirector, getMediaCallServer } from './injection';
+import { SIP_CALL_FEATURES } from '../constants';
 import type { IMediaCallAgent } from '../definition/IMediaCallAgent';
 import type { IMediaCallCastDirector } from '../definition/IMediaCallCastDirector';
 import { CallRejectedError } from '../definition/common';
@@ -29,6 +30,20 @@ export type CreateCallParams = InternalCallParams & {
 
 // expiration checks by call id
 const scheduledExpirationChecks = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * What the transport can carry is not up for negotiation: a call that goes through the PBX only
+ * ever has the features SIP supports, whoever asked for the others. The providers already clamp
+ * the request, but an app may change the feature list afterwards, so the clamp is applied again
+ * on the way out of the hook.
+ */
+function getFeaturesSupportedByTransport(caller: MediaCallContact, callee: MediaCallContact, features: CallFeature[]): CallFeature[] {
+	if (caller.type !== 'sip' && callee.type !== 'sip') {
+		return features;
+	}
+
+	return features.filter((feature) => SIP_CALL_FEATURES.includes(feature));
+}
 
 class MediaCallDirector {
 	public async hangup(call: IMediaCall, actorAgent: IMediaCallAgent, reason: CallHangupReason): Promise<void> {
@@ -49,14 +64,14 @@ class MediaCallDirector {
 	public async activate(call: IMediaCall, actorAgent: IMediaCallAgent): Promise<void> {
 		logger.debug({ msg: 'MediaCallDirector.activateCall', role: actorAgent.role });
 
-		const stateResult = await MediaCalls.activateCallById(call._id, this.getNewExpirationTime());
-		if (!stateResult.modifiedCount) {
+		const activatedCall = await MediaCalls.activateCallById(call._id, this.getNewExpirationTime());
+		if (!activatedCall) {
 			return;
 		}
 
 		logger.info({ msg: 'Call was flagged as active', callId: call._id });
 		this.scheduleExpirationCheckByCallId(call._id);
-		getMediaCallServer().emitter.emit('callActivated', { callId: call._id, uids: call.uids });
+		getMediaCallServer().emitter.emit('callActivated', { call: activatedCall });
 		return actorAgent.oppositeAgent?.onCallActive(call._id);
 	}
 
@@ -73,22 +88,16 @@ class MediaCallDirector {
 
 		const { webrtcAnswer, ...acceptData } = data;
 
-		const stateResult = await MediaCalls.acceptCallById(call._id, acceptData, this.getNewExpirationTime());
-		// If nothing changed, the call was no longer ringing
-		if (!stateResult.modifiedCount) {
+		const updatedCall = await MediaCalls.acceptCallById(call._id, acceptData, this.getNewExpirationTime());
+		// Nothing came back: the call was no longer ringing
+		if (!updatedCall) {
 			return false;
 		}
 
 		logger.info({ msg: 'Call was flagged as accepted', callId: call._id });
 		this.scheduleExpirationCheckByCallId(call._id);
 
-		const updatedCall = await MediaCalls.findOneById(call._id);
-		if (!updatedCall) {
-			logger.error({ msg: 'Unable to find up to date call data', callId: call._id });
-			return false;
-		}
-
-		getMediaCallServer().emitter.emit('callAccepted', { callId: call._id, uids: updatedCall.uids });
+		getMediaCallServer().emitter.emit('callAccepted', { call: updatedCall });
 
 		await calleeAgent.onCallAccepted(updatedCall);
 		await calleeAgent.oppositeAgent?.onCallAccepted(updatedCall);
@@ -226,7 +235,7 @@ class MediaCallDirector {
 			throw new CallRejectedError('forbidden', hookResult.reason, hookResult.message);
 		}
 
-		const requestedFeatures = hookResult.features || features;
+		const requestedFeatures = getFeaturesSupportedByTransport(caller, callee, hookResult.features || features);
 		const allowedFeatures = requestedFeatures.filter((feature) => getMediaCallServer().isFeatureAvailableForUser(caller.id, feature));
 		const call: Omit<IMediaCall, '_updatedAt'> = {
 			// Use UUIDs to identify all media calls, for better compatibility with libs that require it (such as React Native's CallKit)
@@ -406,7 +415,7 @@ class MediaCallDirector {
 			...(endedBy && { endedBy }),
 		};
 
-		const result = await MediaCalls.hangupCallById(callId, cleanedParams).catch((err) => {
+		const endedCall = await MediaCalls.hangupCallById(callId, cleanedParams).catch((err) => {
 			logger.error({
 				msg: 'Failed to hangup a call.',
 				callId,
@@ -417,17 +426,16 @@ class MediaCallDirector {
 			throw err;
 		});
 
-		const ended = Boolean(result.modifiedCount);
-		if (ended) {
-			logger.info({ msg: 'Call was flagged as ended', callId, reason: params?.reason });
-			getMediaCallServer().updateCallHistory({ callId });
-			const call = await MediaCalls.findOneById<Pick<IMediaCall, '_id' | 'uids'>>(callId, { projection: { uids: 1 } });
-			if (call) {
-				getMediaCallServer().emitter.emit('callEnded', { callId, uids: call.uids });
-			}
+		// Nothing came back: the call had already ended
+		if (!endedCall) {
+			return false;
 		}
 
-		return ended;
+		logger.info({ msg: 'Call was flagged as ended', callId, reason: params?.reason });
+		getMediaCallServer().updateCallHistory({ callId });
+		getMediaCallServer().emitter.emit('callEnded', { call: endedCall });
+
+		return true;
 	}
 
 	public async hangupCallByIdAndNotifyAgents(

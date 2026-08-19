@@ -22,13 +22,11 @@ import sinon from 'sinon';
 
 const triggerEvent = sinon.stub();
 const AppsMock: { self: { triggerEvent: sinon.SinonStub } | undefined } = { self: { triggerEvent } };
-const findOneById = sinon.stub();
 const loggerMock = { warn: sinon.stub(), info: sinon.stub() };
 
 const { notifyAppsOfMediaCallStarted, notifyAppsOfMediaCallParticipantJoined, notifyAppsOfMediaCallEnded, runPreMediaCallCreatedAppHook } =
 	proxyquire.noCallThru().load('../../../../../server/services/media-call/appEvents', {
 		'@rocket.chat/apps': { Apps: AppsMock, AppEvents: AppInterface },
-		'@rocket.chat/models': { MediaCalls: { findOneById } },
 		'./logger': { logger: loggerMock },
 	});
 
@@ -86,7 +84,6 @@ describe('media call app events', () => {
 	beforeEach(() => {
 		triggerEvent.reset();
 		triggerEvent.resolves(undefined);
-		findOneById.reset();
 		loggerMock.warn.reset();
 		loggerMock.info.reset();
 		AppsMock.self = { triggerEvent };
@@ -96,9 +93,7 @@ describe('media call app events', () => {
 
 	describe('contact mapping', () => {
 		it('never lets a contractId reach an app', async () => {
-			findOneById.resolves(makeCall({ activatedAt: new Date('2026-01-01T10:00:05.000Z') }));
-
-			await notifyAppsOfMediaCallEnded('call-id');
+			await notifyAppsOfMediaCallEnded(makeCall({ activatedAt: new Date('2026-01-01T10:00:05.000Z') }));
 
 			const { context } = dispatchedEvent() as { context: { call: Record<string, any> } };
 
@@ -118,9 +113,7 @@ describe('media call app events', () => {
 		});
 
 		it('copies every allowed contact field over', async () => {
-			findOneById.resolves(makeCall());
-
-			await notifyAppsOfMediaCallEnded('call-id');
+			await notifyAppsOfMediaCallEnded(makeCall());
 
 			const { context } = dispatchedEvent() as { context: { call: Record<string, any> } };
 
@@ -134,13 +127,11 @@ describe('media call app events', () => {
 		});
 
 		it('maps the contact that diverted the call, and omits it when the call was not diverted', async () => {
-			findOneById.resolves(
+			await notifyAppsOfMediaCallEnded(
 				makeCall({
 					divertedBy: { type: 'sip', id: '1005', displayName: 'Front Desk', sipExtension: '1005', contractId: 'diverted-by-contract' },
 				}),
 			);
-
-			await notifyAppsOfMediaCallEnded('call-id');
 
 			const { context } = dispatchedEvent() as { context: { call: Record<string, any> } };
 
@@ -149,17 +140,13 @@ describe('media call app events', () => {
 			expect(context.call).to.not.have.property('parentCallId');
 
 			triggerEvent.resetHistory();
-			findOneById.resolves(makeCall());
-
-			await notifyAppsOfMediaCallEnded('call-id');
+			await notifyAppsOfMediaCallEnded(makeCall());
 
 			expect((dispatchedEvent().context as { call: Record<string, any> }).call).to.not.have.property('divertedBy');
 		});
 
 		it('omits the optional contact fields that are not set rather than sending them as undefined', async () => {
-			findOneById.resolves(makeCall({ callee: { type: 'sip', id: 'callee-id', contractId: 'callee-contract' } }));
-
-			await notifyAppsOfMediaCallEnded('call-id');
+			await notifyAppsOfMediaCallEnded(makeCall({ callee: { type: 'sip', id: 'callee-id', contractId: 'callee-contract' } }));
 
 			const { context } = dispatchedEvent() as { context: { call: Record<string, any> } };
 
@@ -170,9 +157,7 @@ describe('media call app events', () => {
 	describe('notifyAppsOfMediaCallStarted', () => {
 		it('dispatches the started event with the moment media started flowing', async () => {
 			const activatedAt = new Date('2026-01-01T10:00:05.000Z');
-			findOneById.resolves(makeCall({ state: 'active', ended: false, activatedAt }));
-
-			await notifyAppsOfMediaCallStarted('call-id');
+			await notifyAppsOfMediaCallStarted(makeCall({ state: 'active', ended: false, activatedAt }));
 
 			const event = dispatchedEvent();
 
@@ -184,9 +169,7 @@ describe('media call app events', () => {
 		});
 
 		it('warns and dispatches nothing when the call has no activation timestamp', async () => {
-			findOneById.resolves(makeCall({ activatedAt: undefined }));
-
-			await notifyAppsOfMediaCallStarted('call-id');
+			await notifyAppsOfMediaCallStarted(makeCall({ activatedAt: undefined }));
 
 			expect(triggerEvent.callCount).to.equal(0);
 			expect(loggerMock.warn.firstCall.firstArg).to.include({ callId: 'call-id', field: 'activatedAt' });
@@ -196,9 +179,7 @@ describe('media call app events', () => {
 	describe('notifyAppsOfMediaCallParticipantJoined', () => {
 		it('dispatches a call whose callee is the side that joined', async () => {
 			const acceptedAt = new Date('2026-01-01T10:00:03.000Z');
-			findOneById.resolves(makeCall({ state: 'accepted', ended: false, acceptedAt }));
-
-			await notifyAppsOfMediaCallParticipantJoined('call-id');
+			await notifyAppsOfMediaCallParticipantJoined(makeCall({ state: 'accepted', ended: false, acceptedAt }));
 
 			const event = dispatchedEvent();
 
@@ -212,9 +193,7 @@ describe('media call app events', () => {
 		});
 
 		it('warns and dispatches nothing when the call has no acceptance timestamp', async () => {
-			findOneById.resolves(makeCall({ acceptedAt: undefined }));
-
-			await notifyAppsOfMediaCallParticipantJoined('call-id');
+			await notifyAppsOfMediaCallParticipantJoined(makeCall({ acceptedAt: undefined }));
 
 			expect(triggerEvent.callCount).to.equal(0);
 			expect(loggerMock.warn.firstCall.firstArg).to.include({ callId: 'call-id', field: 'acceptedAt' });
@@ -224,15 +203,13 @@ describe('media call app events', () => {
 	describe('notifyAppsOfMediaCallEnded', () => {
 		it('dispatches who ended the call and why when both are known', async () => {
 			const endedAt = new Date('2026-01-01T10:01:00.000Z');
-			findOneById.resolves(
+			await notifyAppsOfMediaCallEnded(
 				makeCall({
 					endedAt,
 					endedBy: { type: 'user', id: 'callee-id', contractId: 'callee-contract' },
 					hangupReason: 'not-answered',
 				}),
 			);
-
-			await notifyAppsOfMediaCallEnded('call-id');
 
 			const event = dispatchedEvent();
 
@@ -248,9 +225,7 @@ describe('media call app events', () => {
 		});
 
 		it('omits endedBy and hangupReason when the call recorded neither', async () => {
-			findOneById.resolves(makeCall({ endedAt: new Date('2026-01-01T10:01:00.000Z') }));
-
-			await notifyAppsOfMediaCallEnded('call-id');
+			await notifyAppsOfMediaCallEnded(makeCall({ endedAt: new Date('2026-01-01T10:01:00.000Z') }));
 
 			const context = dispatchedEvent().context as Record<string, any>;
 
@@ -259,17 +234,13 @@ describe('media call app events', () => {
 		});
 
 		it('reports a server actor as the one that ended the call', async () => {
-			findOneById.resolves(makeCall({ endedBy: { type: 'server', id: 'server' }, hangupReason: 'expired' }));
-
-			await notifyAppsOfMediaCallEnded('call-id');
+			await notifyAppsOfMediaCallEnded(makeCall({ endedBy: { type: 'server', id: 'server' }, hangupReason: 'expired' }));
 
 			expect((dispatchedEvent().context as Record<string, any>).call.endedBy).to.deep.equal({ type: 'server', id: 'server' });
 		});
 
 		it('warns and dispatches nothing when the call has no end timestamp', async () => {
-			findOneById.resolves(makeCall({ endedAt: undefined }));
-
-			await notifyAppsOfMediaCallEnded('call-id');
+			await notifyAppsOfMediaCallEnded(makeCall({ endedAt: undefined }));
 
 			expect(triggerEvent.callCount).to.equal(0);
 			expect(loggerMock.warn.firstCall.firstArg).to.include({ callId: 'call-id', field: 'endedAt' });
@@ -277,9 +248,7 @@ describe('media call app events', () => {
 
 		describe('durationMs', () => {
 			async function durationOf(overrides: Partial<IMediaCall>): Promise<number> {
-				findOneById.resolves(makeCall(overrides));
-
-				await notifyAppsOfMediaCallEnded('call-id');
+				await notifyAppsOfMediaCallEnded(makeCall(overrides));
 
 				return (dispatchedEvent().context as { durationMs: number }).durationMs;
 			}
@@ -332,9 +301,7 @@ describe('media call app events', () => {
 			});
 
 			it(`reports ${description} as ${origin} on the call the post events carry`, async () => {
-				findOneById.resolves(makeCall({ caller, callee }));
-
-				await notifyAppsOfMediaCallEnded('call-id');
+				await notifyAppsOfMediaCallEnded(makeCall({ caller, callee }));
 
 				const { context } = dispatchedEvent() as { context: { call: Record<string, any> } };
 
@@ -343,9 +310,7 @@ describe('media call app events', () => {
 		});
 
 		it('reads the origin off the contacts rather than off the service the call is carried by', async () => {
-			findOneById.resolves(makeCall({ caller: extension, callee: user2 }));
-
-			await notifyAppsOfMediaCallEnded('call-id');
+			await notifyAppsOfMediaCallEnded(makeCall({ caller: extension, callee: user2 }));
 
 			const { context } = dispatchedEvent() as { context: { call: Record<string, any> } };
 
@@ -356,25 +321,15 @@ describe('media call app events', () => {
 	});
 
 	describe('post event guards', () => {
-		it('does not even load the call when the Apps-Engine is not running', async () => {
+		it('dispatches nothing when the Apps-Engine is not running', async () => {
 			AppsMock.self = undefined;
 
-			await notifyAppsOfMediaCallStarted('call-id');
-			await notifyAppsOfMediaCallParticipantJoined('call-id');
-			await notifyAppsOfMediaCallEnded('call-id');
-
-			expect(findOneById.callCount).to.equal(0);
-			expect(triggerEvent.callCount).to.equal(0);
-		});
-
-		it('warns and dispatches nothing for a call that no longer exists', async () => {
-			findOneById.resolves(null);
-
-			await notifyAppsOfMediaCallEnded('gone-call-id');
+			await notifyAppsOfMediaCallStarted(makeCall({ activatedAt: new Date('2026-01-01T10:00:05.000Z') }));
+			await notifyAppsOfMediaCallParticipantJoined(makeCall({ acceptedAt: new Date('2026-01-01T10:00:03.000Z') }));
+			await notifyAppsOfMediaCallEnded(makeCall());
 
 			expect(triggerEvent.callCount).to.equal(0);
-			expect(loggerMock.warn.callCount).to.equal(1);
-			expect(loggerMock.warn.firstCall.firstArg).to.have.property('callId', 'gone-call-id');
+			expect(loggerMock.warn.callCount).to.equal(0);
 		});
 	});
 

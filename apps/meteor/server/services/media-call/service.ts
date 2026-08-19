@@ -41,16 +41,16 @@ export class MediaCallService extends ServiceClassInternal implements IMediaCall
 		super();
 		callServer.emitter.on('signalRequest', ({ toUid, signal }) => this.sendSignal(toUid, signal));
 		callServer.emitter.on('callUpdated', (params) => api.broadcast('media-call.updated', params));
-		callServer.emitter.on('callActivated', ({ callId, uids }) => this.setPresenceForUsers(uids, callId));
-		callServer.emitter.on('callEnded', ({ callId, uids }) => this.clearPresenceForUsers(uids, callId));
+		callServer.emitter.on('callActivated', ({ call }) => this.setPresenceForUsers(call.uids, call._id));
+		callServer.emitter.on('callEnded', ({ call }) => this.clearPresenceForUsers(call.uids, call._id));
 		callServer.emitter.on('historyUpdate', ({ callId }) => setImmediate(() => this.saveCallToHistory(callId)));
 		callServer.emitter.on('pushNotificationRequest', ({ callId, event }) => sendVoipPushNotification(callId, event));
 		this.onEvent('media-call.updated', (params) => callServer.receiveCallUpdate(params));
 
 		// Apps-Engine media call events
-		callServer.emitter.on('callAccepted', ({ callId }) => this.notifyApps(callId, notifyAppsOfMediaCallParticipantJoined));
-		callServer.emitter.on('callActivated', ({ callId }) => this.notifyApps(callId, notifyAppsOfMediaCallStarted));
-		callServer.emitter.on('callEnded', ({ callId }) => this.notifyApps(callId, notifyAppsOfMediaCallEnded));
+		callServer.emitter.on('callAccepted', ({ call }) => this.notifyApps(call, notifyAppsOfMediaCallParticipantJoined));
+		callServer.emitter.on('callActivated', ({ call }) => this.notifyApps(call, notifyAppsOfMediaCallStarted));
+		callServer.emitter.on('callEnded', ({ call }) => this.notifyApps(call, notifyAppsOfMediaCallEnded));
 		callServer.setHooks({ onPreCallCreated: runPreMediaCallCreatedAppHook });
 
 		this.onEvent('watch.settings', async ({ setting }): Promise<void> => {
@@ -157,10 +157,18 @@ export class MediaCallService extends ServiceClassInternal implements IMediaCall
 		return signals;
 	}
 
-	/** Apps observe calls, they don't take part in them: never let one delay or break call signaling. */
-	private notifyApps(callId: IMediaCall['_id'], notify: (callId: IMediaCall['_id']) => Promise<void>): void {
+	/**
+	 * Apps observe calls, they don't take part in them: never let one delay or break call
+	 * signaling. The event carries the call as it was when the event happened, so a notification
+	 * that waits still describes the transition it belongs to.
+	 *
+	 * One call's events reach an app in the order they happened, and nothing here has to arrange
+	 * that: `setImmediate` runs the notifications in the order they were queued, and a notification
+	 * awaits nothing between here and the JSON-RPC request the app receives.
+	 */
+	private notifyApps(call: IMediaCall, notify: (call: IMediaCall) => Promise<void>): void {
 		setImmediate(() => {
-			notify(callId).catch((err) => logger.error({ msg: 'Failed to notify apps about a media call event', err, callId }));
+			notify(call).catch((err) => logger.error({ msg: 'Failed to notify apps about a media call event', err, callId: call._id }));
 		});
 	}
 

@@ -15,7 +15,6 @@ import { AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
 import type { IMediaCall, MediaCallActor, MediaCallContact, ServerActor } from '@rocket.chat/core-typings';
 import type { PreCallCreatedHookParams, PreCallCreatedHookResult } from '@rocket.chat/media-calls';
 import { callFeatureList, type CallFeature, type CallRejectionMessage } from '@rocket.chat/media-signaling';
-import { MediaCalls } from '@rocket.chat/models';
 
 import { logger } from './logger';
 
@@ -142,26 +141,13 @@ async function triggerMediaCallEvent(event: MediaCallEvent): Promise<unknown> {
 }
 
 /**
- * Post events are observational, so a call that can no longer be loaded is not an
- * error worth disrupting anything over. A workspace with no apps skips the read.
+ * Every post event is reported from the call as it was when the event happened. The call is never
+ * read again on the way here: by then it may already have moved on, and an app that is told about
+ * an accepted call has to be told about the call that was accepted. A workspace with no apps
+ * skips the work.
  */
-async function findCallToReport(callId: IMediaCall['_id']): Promise<IMediaCall | undefined> {
+export async function notifyAppsOfMediaCallStarted(call: IMediaCall): Promise<void> {
 	if (!Apps.self) {
-		return undefined;
-	}
-
-	const call = await MediaCalls.findOneById(callId);
-	if (!call) {
-		logger.warn({ msg: 'Unable to notify apps about a call that no longer exists', callId });
-		return undefined;
-	}
-
-	return call;
-}
-
-export async function notifyAppsOfMediaCallStarted(callId: IMediaCall['_id']): Promise<void> {
-	const call = await findCallToReport(callId);
-	if (!call) {
 		return;
 	}
 
@@ -174,9 +160,8 @@ export async function notifyAppsOfMediaCallStarted(callId: IMediaCall['_id']): P
 	await triggerMediaCallEvent({ method: AppMethod.EXECUTE_POST_MEDIA_CALL_STARTED, context: { call: activeCall } });
 }
 
-export async function notifyAppsOfMediaCallParticipantJoined(callId: IMediaCall['_id']): Promise<void> {
-	const call = await findCallToReport(callId);
-	if (!call) {
+export async function notifyAppsOfMediaCallParticipantJoined(call: IMediaCall): Promise<void> {
+	if (!Apps.self) {
 		return;
 	}
 
@@ -189,9 +174,8 @@ export async function notifyAppsOfMediaCallParticipantJoined(callId: IMediaCall[
 	await triggerMediaCallEvent({ method: AppMethod.EXECUTE_POST_MEDIA_CALL_PARTICIPANT_JOINED, context: { call: acceptedCall } });
 }
 
-export async function notifyAppsOfMediaCallEnded(callId: IMediaCall['_id']): Promise<void> {
-	const call = await findCallToReport(callId);
-	if (!call) {
+export async function notifyAppsOfMediaCallEnded(call: IMediaCall): Promise<void> {
+	if (!Apps.self) {
 		return;
 	}
 

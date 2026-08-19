@@ -68,18 +68,20 @@ the architectural precedent for how apps-engine exposes a call-like domain.
    `IAcceptedMediaCall`, `IEndedMediaCall`). The one field that stays outside is
    `IMediaCallEndedContext.durationMs`: the call carries the two timestamps it is computed from, not
    the result.
-6. **The host reads the call when it dispatches the event, and the timestamp is what the event
-   promises.** No document reaches the host with the transition: the guarded state changes are
-   `updateOne`s returning an `UpdateResult` (`MediaCalls.ts:90-152`), and `callAccepted` /
-   `callActivated` / `callEnded` carry `{ callId, uids }` only
-   (`IMediaCallServer.ts:16-24`) — `callActivated` and `callEnded` are in fact emitted with the
-   *pre-update* call in hand (`CallDirector.ts:59,426`), so widening those payloads would not help
-   either. `findCallToReport` therefore loads the call by id (`appEvents.ts:148-160`). Two
-   consequences, both accepted: each post event costs one extra query, and the snapshot is the call
-   **as of dispatch, not as of the transition** — a call that ends in between is reported with
-   `state: 'hangup'` on its own *started* event. What the context does guarantee is the timestamp it
-   is named after, so `getEventTimestamp` (`:101-107`) drops the event and logs rather than emit one
-   without it.
+6. **The transition hands the call over, and one call's events reach an app in order.** The three
+   guarded state changes are `findOneAndUpdate`s that return the call the transition produced
+   (`MediaCalls.ts:90-155`), and `callAccepted` / `callActivated` / `callEnded` carry that document
+   (`IMediaCallServer.ts:16-29`, emitted at `CallDirector.ts:74,100,436`). Nothing reads the call
+   again on the way to an app, so the snapshot is the call **as of the transition**: an event
+   describes the call it is about, even when the call moves on while the notification waits, and a
+   post event costs no query of its own. Losing that read is also what puts the events of one call
+   in order: `MediaCallService.notifyApps` defers each one with `setImmediate`, which runs them in
+   the order they were queued, and a notification now awaits nothing between there and the JSON-RPC
+   request the app receives (`triggerEvent` → `handleEvent` → `executeListener` →
+   `executePostMediaCallEvent` → `ProxiedApp.call` → `sendRequest`, all synchronous up to the write
+   to the subprocess). An app is told a call started before it is told the call ended. What a
+   context still only guarantees is the timestamp it is named after, so `getEventTimestamp`
+   (`appEvents.ts:100-106`) drops the event and logs rather than emit one without it.
 7. **The prevention reason reaches the caller as a toast.** A `CallRejectionMessage`
    (`packages/media-signaling/src/definition/call/common.ts`) carries plain text or an `i18n` key
    with its `args`, threaded through `PreCallCreatedHookResult.message` →
@@ -186,6 +188,12 @@ Recorded so they are not mistaken for oversights.
   not swallow, or a sentinel that separates method-not-found from a swallowed failure. Left as is
   in Phase 1 deliberately: fail-closed here means a slow app subprocess stops users from placing
   calls, and that trade is the engine's to make once, not this event's to make alone.
+- **The event order of decision 6 holds inside one instance, and rests on a synchronous dispatch
+  path.** Both the emitter and `Apps.self.triggerEvent` are in-process, so an instance tells its own
+  apps about the transitions it performed itself; a call whose transitions land on two instances is
+  reported by each of them, in no particular order between the two. An `await` added anywhere
+  between `notifyApps` and `ProxiedApp.call` would also reorder the events of a single call, and
+  nothing in the engine enforces that it stays out.
 - **`ee/packages/media-calls` has no test harness at all** — no `test` script in its `package.json`
   and no spec files. `CallDirector`'s pre-hook branch and the `IncomingSipCall` rejection mapping are
   therefore covered by the Playwright suite only. Standing up mocha (or `node:test`) for that
@@ -228,10 +236,11 @@ Persisted record — `IMediaCall` (`packages/core-typings/src/mediaCalls/IMediaC
 Negotiation record — `IMediaCallNegotiation`: one document per SDP (re)negotiation round. **SDP
 offer/answer payloads are persisted there.**
 
-State transitions are enforced as **race-safe guarded `updateOne`s** on the model — this is where
-the persisted state machine actually lives: `startRingingById` (`MediaCalls.ts:80-88`),
-`acceptCallById` (`:90-116`), `activateCallById` (`:118-132`), `hangupCallById` (`:134-152`),
-`transferCallById` (`:166-185`).
+State transitions are enforced as **race-safe guarded updates** on the model — this is where the
+persisted state machine actually lives: `startRingingById` (`MediaCalls.ts:80-88`), `acceptCallById`
+(`:90-117`), `activateCallById` (`:119-134`), `hangupCallById` (`:136-155`), `transferCallById`
+(`:169-188`). The three that a post event reports are `findOneAndUpdate`s and return the call they
+produced; the others return an `UpdateResult`, because nothing needs the document.
 
 ### The lifecycle engine and its event emitter
 
