@@ -87,7 +87,8 @@ already treat an unknown variant as `pass`.
    union *type* and a *value* namespace of factory functions. Factories stamp the marker and return
    **branded per-variant types**. Per-event narrowing comes from **each handler interface's
    restricted return-type alias** — not from a new accessor and not from a generic `IModify`.
-6. **`patch` merge is shallow** (`Object.assign`); nested objects and arrays are replaced wholesale.
+6. **`patch` merge is shallow** — one level of spread over the subject, as `Object.assign` does at the
+   existing Modify call sites; nested objects and arrays are replaced wholesale.
 7. **Patchable fields mirror the builder surface** per subject (an explicit allow-list constant
    tracking `IMessageBuilder` / `IRoomBuilder` / …). Re-validate **once, at end of pass**.
 8. **`prevent` carries either `reason` (literal) or `i18n: { key, args? }`** — two mutually
@@ -120,13 +121,13 @@ Existing inconsistencies, which are the evidence this space needs unifying:
 - `IPreLivechatRoomCreatePrevent` carries the `Prevent` suffix but is void/throw, not boolean — and
   its `AppMethod` string even drops the `Pre` (`executeLivechatRoomCreatePrevent`).
 - In the listener type map `IListenerExecutor`
-  (`packages/apps/src/server/managers/AppListenerManager.ts:40`), `IPreMessageUpdatedExtend` is
+  (`packages/apps/src/server/managers/AppListenerManager.ts:47`), `IPreMessageUpdatedExtend` is
   typed `result: boolean` while its sibling `IPreMessageSentExtend` is `IMessage`;
   `IPreMessageUpdatedPrevent` is `result: unknown`; `IPreEmailSent` is typed `IUIKitResponse` but
   the implementation returns `IEmailDescriptor`.
 - Prevention exists in **three** forms today (boolean return, thrown exception, and — for email —
   either).
-- `prevent` reasons are surfaced **inconsistently**: `createRoom.ts:267`, `FileUpload.ts:202` and
+- `prevent` reasons are surfaced **inconsistently**: `createRoom.ts:267`, `FileUpload.ts:206` and
   `addUserToRoom.ts:75` throw the app's `error.message`, but `updateMessage.ts:34` and
   `deleteMessage.ts:42` throw a canned generic string and discard the app's reason entirely.
 
@@ -138,14 +139,14 @@ different subsets** of `EventResult` (upload may allow `prompt`; a login pre-eve
 This is the crux of the non-breaking analysis. Return values are consumed at three tiers:
 
 1. **`AppListenerManager`** — the per-event executors. Every one consumes the app's return with a
-   **blind cast, no shape inspection**: `as boolean` (`:498`, `:547`) or `as IMessage` (`:547`,
-   `:728`, `:821`). Prevent loops short-circuit on the first truthy value (`:500`); Modify/Extend
-   **chain** the returned object into the next app (`msg = await app.call(...)`, `:524`, `:547`).
+   **blind cast, no shape inspection**: `as boolean` (`:512`) or `as IMessage` / `as IRoom` (`:561`,
+   `:741`, `:834`). Prevent loops short-circuit on the first truthy value (`:514`); Modify/Extend
+   **chain** the returned object into the next app (`msg = await app.call(...)`, `:538`, `:561`).
 2. **`AppListenerBridge`** (`apps/meteor/app/apps/server/bridges/listeners.ts`) — only **two** sites
-   duck-type the result, and coarsely: `messageEvent` (`:369`) and `roomEvent` (`:414`) both treat
+   duck-type the result, and coarsely: `messageEvent` (`:377`) and `roomEvent` (`:421`) both treat
    "boolean or undefined → pass through, anything else → it is the entity, convert it".
 3. **The Rocket.Chat server call sites** — `sendMessage.ts:241`/`:252`, `createRoom.ts:265`,
-   `deleteMessage.ts:40`, `updateMessage.ts:32`, `FileUpload.ts:197`, `email/api.ts:177`.
+   `deleteMessage.ts:40`, `updateMessage.ts:32`, `FileUpload.ts:203`, `email/api.ts:176`.
 
 Two facts fall out of this and drive the whole design:
 
@@ -406,7 +407,7 @@ widened handlers accept legacy shapes behind the guard-before-legacy ordering.
    implementation detail. Most of the generator already exists: `MessageBuilder`
    (`packages/apps/base-runtime/src/lib/accessors/builders/MessageBuilder.ts`) is already a change
    recorder — it keeps `private changes: Partial<IMessage>` (`:17`) and exposes `getChanges()`
-   (`:253`) — and it already demonstrates the exact intent erasure described above:
+   (`:254`) — and it already demonstrates the exact intent erasure described above:
    `addAttachment`, `setAttachments`, `replaceAttachment(position, …)` and
    `removeAttachment(position)` all collapse to one `attachmentsChanged` flag (`:122`–`:164`), so
    `getChanges()` emits the whole array wholesale (`:257`). `RoomBuilder.getChanges()` (`:182`) has
@@ -416,8 +417,9 @@ widened handlers accept legacy shapes behind the guard-before-legacy ordering.
    - **No new API for app authors.** The builder methods they already call *are* the declarative
      surface; `removeAttachment(2)` emits `remove /attachments/2`. A future `unset` emits
      `remove /alias`, closing the deletion hole.
-   - **It also fixes `ModifyUpdater`** (`:92`, `:122`), which today ships the entire attachments
-     array to the server for any single-attachment change.
+   - **It also fixes `ModifyUpdater`**
+     (`packages/apps/base-runtime/src/lib/accessors/modify/ModifyUpdater.ts:92`, `:122`), which today
+     ships the entire attachments array to the server for any single-attachment change.
    - **It rules out two tempting alternatives.** Structural diffing (`patch(before, after)`) cannot
      recover the append-vs-replace distinction that is the whole point, and Immer's
      `produceWithPatches` would mean bundling a dependency into every app sandbox — `apps-engine`
@@ -465,9 +467,9 @@ widened handlers accept legacy shapes behind the guard-before-legacy ordering.
 
 - Handler definitions: `packages/apps-engine/src/definition/{messages,rooms,uploads,email,livechat}/IPre*.ts`
 - Enums: `packages/apps-engine/src/definition/metadata/AppInterface.ts`, `.../AppMethod.ts`
-- Listener type map, executors and blind casts: `packages/apps/src/server/managers/AppListenerManager.ts:40` (map), `:348` (dispatch), `:479`/`:508`/`:531` (prevent/extend/modify templates), `:1178` (upload), `:1186` (email)
+- Listener type map, executors and blind casts: `packages/apps/src/server/managers/AppListenerManager.ts:47` (map), `:359` (dispatch), `:493`/`:522`/`:545` (prevent/extend/modify templates), `:1191` (upload), `:1199` (email)
 - Runtime / JSON-RPC boundary: `packages/apps/src/server/ProxiedApp.ts:64`
-- Bridge duck-typing: `apps/meteor/app/apps/server/bridges/listeners.ts:369` (message), `:414` (room), `:191`/`:252` (upload)
-- Server call sites: `apps/meteor/server/lib/messages/sendMessage.ts:241`/`:252`, `.../deleteMessage.ts:40`, `.../updateMessage.ts:32`, `apps/meteor/server/lib/rooms/createRoom.ts:265`, `apps/meteor/server/lib/media/file-upload/lib/FileUpload.ts:197`, `apps/meteor/server/lib/notifications/email/api.ts:177`
+- Bridge duck-typing: `apps/meteor/app/apps/server/bridges/listeners.ts:377` (message), `:421` (room), `:198`/`:291` (upload)
+- Server call sites: `apps/meteor/server/lib/messages/sendMessage.ts:241`/`:252`, `.../deleteMessage.ts:40`, `.../updateMessage.ts:32`, `apps/meteor/server/lib/rooms/createRoom.ts:265`, `apps/meteor/server/lib/media/file-upload/lib/FileUpload.ts:203`, `apps/meteor/server/lib/notifications/email/api.ts:176`
 - Builder setter surface (the `patch` allow-list's source of truth): `packages/apps-engine/src/definition/accessors/IMessageBuilder.ts:23`/`:56`/`:68`
 - Collision field: `packages/apps-engine/src/definition/messages/IMessage.ts:37` (`type?: MessageType`)

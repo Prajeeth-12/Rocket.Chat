@@ -35,11 +35,19 @@ the architectural precedent for how apps-engine exposes a call-like domain.
 1. **One app-facing interface, one optional method per event.** `IMediaCallHandler`
    (`packages/apps-engine/src/definition/mediaCalls/`) has one optional method per event, keyed by
    `AppMethod` — the shape `IUIKitActionHandler` already established here. Per-event return-type
-   narrowing and per-event opt-out survive; there is no internal `eventType` `switch`.
-2. **The engine still dispatches per event.** The aggregate interface is app-facing grouping only.
-   Under it, `AppListenerManager` keeps one executor per event and the host `ListenerBridge` one
-   case per event, exactly like message and room events. Prevent short-circuiting and patch chaining
-   come from the listener loop, not from a reimplementation.
+   narrowing and per-event opt-out survive, and an app never writes an internal `eventType` `switch`
+   (the dispatch-side router of decision 2 is the engine's, not the app's).
+2. **One `AppInterface` member and one envelope, not one per event.** Because the interface *is* the
+   subscription, all four events travel under `AppInterface.IMediaCallHandler`: the host sends a
+   `MediaCallEvent` envelope, the `ListenerBridge` has a single case for it, and
+   `AppListenerManager.executeMediaCallEvent` (`:1303-1310`) routes on the envelope's `method`. This
+   is the one place media calls depart from the message and room events, which spend one
+   `AppInterface` member, one bridge case and one executor per event. Under the router there are two
+   executors, one per event *kind* — the serial pre loop `executePreMediaCallCreated`
+   (`:1312-1362`) and the post fan-out `executePostMediaCallEvent` (`:1375-1398`) — so prevent
+   short-circuiting and patch chaining still live in an ordinary listener loop rather than in a
+   reimplementation. Per-event return-type narrowing and per-event opt-out come from the handler
+   interface, not from the dispatch, so collapsing the members costs neither.
 3. **Four events in Phase 1.**
    - `executePostMediaCallStarted` — from `callActivated`
    - `executePostMediaCallParticipantJoined` — from a new `callAccepted` emitter event
@@ -57,11 +65,18 @@ the architectural precedent for how apps-engine exposes a call-like domain.
    `IAcceptedMediaCall`, `IEndedMediaCall`). The one field that stays outside is
    `IMediaCallEndedContext.durationMs`: the call carries the two timestamps it is computed from, not
    the result.
-6. **The snapshot is the document the emitting update wrote, not a re-read.** `callAccepted` /
-   `callActivated` / `callEnded` carry the call itself, and the three `MediaCalls` state changes
-   return it through `findOneAndUpdate`, so the path from state change to app costs no extra query.
-   It also pins each event to the call as of its own moment: a re-read would report a call that
-   ended in between as `'hangup'` on the *started* event.
+6. **The host reads the call when it dispatches the event, and the timestamp is what the event
+   promises.** No document reaches the host with the transition: the guarded state changes are
+   `updateOne`s returning an `UpdateResult` (`MediaCalls.ts:90-152`), and `callAccepted` /
+   `callActivated` / `callEnded` carry `{ callId, uids }` only
+   (`IMediaCallServer.ts:16-24`) — `callActivated` and `callEnded` are in fact emitted with the
+   *pre-update* call in hand (`CallDirector.ts:59,426`), so widening those payloads would not help
+   either. `findCallToReport` therefore loads the call by id (`appEvents.ts:148-160`). Two
+   consequences, both accepted: each post event costs one extra query, and the snapshot is the call
+   **as of dispatch, not as of the transition** — a call that ends in between is reported with
+   `state: 'hangup'` on its own *started* event. What the context does guarantee is the timestamp it
+   is named after, so `getEventTimestamp` (`:101-107`) drops the event and logs rather than emit one
+   without it.
 7. **The prevention reason reaches the caller as a toast.** A `CallRejectionMessage`
    (`packages/media-signaling/src/definition/call/common.ts`) carries plain text or an `i18n` key
    with its `args`, threaded through `PreCallCreatedHookResult.message` →
@@ -86,8 +101,12 @@ the architectural precedent for how apps-engine exposes a call-like domain.
 - Apps can classify every media call as `internal`, `sip-outbound` or `sip-inbound` without knowing
   the routing rules. Calls already in the database report the correct origin; no migration, no
   persisted field.
-- Every new media-call event costs the full P1 wiring recipe. The single interface buys author
-  ergonomics, not maintainer ergonomics.
+- A new media-call event is cheaper than a new event elsewhere in the engine, because the envelope
+  dispatch of decision 2 is already wired for the whole family: a post event needs no listener-manager
+  change at all, and none of the four events needs an `AppInterface` member or a bridge case of its
+  own. The cost moves rather than disappearing — the family shares one `IListenerExecutor` `result`
+  union, so a pre event with a new return shape widens it for every member. See
+  [the wiring recipe](#adding-an-event--the-wiring-recipe).
 - **Apps still see one internal SIP-routed conversation as two unlinked calls**, and still see
   `callee.type === 'sip'` for a call between two workspace users. An app that needs one record per
   conversation has no host-provided way to deduplicate.
@@ -96,7 +115,7 @@ the architectural precedent for how apps-engine exposes a call-like domain.
   one. **An app that means to block a call must act on the outbound leg**, that is, on the event
   where `origin` is `sip-outbound` or `internal`.
 - The two legs are not equivalent, which matters for any app that picks one. The **outbound** leg's
-  timestamps track the PBX dialog (`OutgoingSipCall.createDialog:266`,
+  timestamps track the PBX dialog (`OutgoingSipCall.createDialog:113`, the accept at `:266`,
   `sipDialog.on('destroy'):207`), so it spans the actual conversation and its duration and hangup
   reason are meaningful; its `uids` lists only `user1`. The **inbound** leg carries `user2` in
   `uids` and reports `user2`'s own accept, so it is the leg that says the callee actually answered.
@@ -114,7 +133,7 @@ Recorded so they are not mistaken for oversights.
 - **The pre event fails open when the app's request times out.** `executePreMediaCallCreated`
   rethrows the errors it sees, so an app that throws blocks the call — a policy handler that could
   not decide must not read as `pass`. A *timed-out* request never reaches that branch:
-  `ProxiedApp.call` (`packages/apps/src/server/ProxiedApp.ts:64-85`) rethrows only
+  `ProxiedApp.call` (`packages/apps/src/server/ProxiedApp.ts:64-86`) rethrows only
   `AppsEngineException` and `JSONRPC_METHOD_NOT_FOUND`, and a timeout rejects with a plain `Error`
   whose `code` is `undefined`, so both range checks are false and the method returns `undefined`
   with nothing logged. The listener loop reads that as "no result" and the call is created.
@@ -137,9 +156,9 @@ touches all three.
 
 | Layer | Location | Contents |
 |---|---|---|
-| **SDK / definitions** (published `@rocket.chat/apps-engine`) | `packages/apps-engine/src/definition/` | `AppInterface`, `AppMethod`, handler interfaces, accessor interfaces, context/permission/association types. `package.json` ships only `definition/**` (`packages/apps-engine/package.json:39-41`). |
-| **Engine runtime** (published `@rocket.chat/apps`) | `packages/apps/src/server/` | `managers/` (`AppListenerManager`, `AppVideoConfProviderManager`), abstract `bridges/`, concrete `accessors/`, `converters/`, `AppManager`, `ProxiedApp`. |
-| **Host (real Rocket.Chat)** | `apps/meteor/app/apps/server/` + `apps/meteor/ee/server/apps/` | Concrete bridge subclasses, converters, orchestrator (`ee/server/apps/orchestrator.js`). |
+| **SDK / definitions** (published `@rocket.chat/apps-engine`) | `packages/apps-engine/src/definition/` | `AppInterface`, `AppMethod`, handler interfaces, accessor interfaces, context/permission/association types. `package.json` ships only `definition/**` (`packages/apps-engine/package.json:37-39`). |
+| **Engine runtime** (published `@rocket.chat/apps`) | `packages/apps/src/` + `packages/apps/base-runtime/src/` | `src/server/managers/` (`AppListenerManager`, `AppVideoConfProviderManager`), abstract `src/server/bridges/`, `src/server/{AppManager,ProxiedApp}.ts`, `src/converters/`. The **concrete accessors are not here** — they live in `base-runtime/src/lib/accessors/` (`read/`, `modify/`, builders, extenders) and are assembled in `accessors/mod.ts`; there is no `AppAccessorManager` — see [ADR 0001](./0001-app-accessor-logic-in-base-runtime.md). |
+| **Host (real Rocket.Chat)** | `apps/meteor/app/apps/server/` + `apps/meteor/ee/server/apps/` | Concrete bridge subclasses, converters, orchestrator (`ee/server/apps/orchestrator.ts`). |
 
 The host imports the engine from `@rocket.chat/apps/dist/...`, so **the `packages/apps` build must
 be regenerated** for host changes to see new engine code
@@ -147,7 +166,7 @@ be regenerated** for host changes to see new engine code
 
 ### The media call domain object
 
-Persisted record — `IMediaCall` (`packages/core-typings/src/mediaCalls/IMediaCall.ts:35-71`):
+Persisted record — `IMediaCall` (`packages/core-typings/src/mediaCalls/IMediaCall.ts:35-74`):
 
 - `service: 'webrtc'`, `kind: 'direct'` — only 1:1 direct WebRTC/SIP calls exist today (`:36-37`).
 - `state: 'none' | 'ringing' | 'accepted' | 'active' | 'hangup'` (`:33,39`). The stored enum is
@@ -159,7 +178,7 @@ Persisted record — `IMediaCall` (`packages/core-typings/src/mediaCalls/IMediaC
   `endedBy`, `endedAt`, `hangupReason` (`:47-50`); transfer fields `transferredBy/To/At`,
   `parentCallId` (`:60,63-65`); `divertedBy` for a call the PBX forwarded (`:68`, RFC 5806
   `Diversion`) — a diversion is not a transfer and carries no `parentCallId`.
-- `uids: string[]` (`:67`), `features: string[]` (`:70`) — the negotiated capability set, finalized
+- `uids: string[]` (`:70`), `features: string[]` (`:73`) — the negotiated capability set, finalized
   on accept.
 
 Negotiation record — `IMediaCallNegotiation`: one document per SDP (re)negotiation round. **SDP
@@ -178,19 +197,21 @@ singleton gateway. `MediaCallDirector` (`ee/packages/media-calls/src/server/Call
 interception choke point.
 
 Before this work the only outward event channel was a typed `Emitter`, `MediaCallServerEvents`
-(`ee/packages/media-calls/src/definition/IMediaCallServer.ts:10-17`): `callUpdated`,
+(`ee/packages/media-calls/src/definition/IMediaCallServer.ts:16-24`): `callUpdated`,
 `callActivated`, `callEnded`, `signalRequest`, `historyUpdate`, `pushNotificationRequest`.
+`callAccepted` is the one member this work added, and every payload carries ids only — see
+decision 6.
 
 ### The integration seam
 
 `MediaCallService` (`apps/meteor/server/services/media-call/service.ts`) is the thin Meteor adapter
-over the EE `callServer` engine. Its constructor (`service.ts:34-51`) wires the emitter into the rest
+over the EE `callServer` engine. Its constructor (`service.ts:40-63`) wires the emitter into the rest
 of Rocket.Chat — `signalRequest`, `callUpdated`, `callActivated` (sets Presence BUSY), `callEnded`
 (clears Presence), `historyUpdate` (`saveCallToHistory`), `pushNotificationRequest` — and is exactly
 where the apps-engine dispatch subscribes, mirroring how it already forwards these events onto the
 microservice bus. The service also owns the permission and feature callbacks injected into the engine
-(`getMediaServerSettings` `:411-437`, `userHasMediaCallPermission` `:451-459`,
-`userHasFeaturePermission` `:439-449`) — an existing, function-shaped extension seam.
+(`getMediaServerSettings` `:430-456`, `userHasMediaCallPermission` `:470-478`,
+`userHasFeaturePermission` `:458-468`) — an existing, function-shaped extension seam.
 
 ### How apps-engine extension mechanisms work
 
@@ -216,7 +237,7 @@ host implements. The canonical minimal precedent is `IVideoConferenceRead` → `
 
 Nothing in `IPreMediaCallCreatedContext` or the app-facing `IMediaCall` used to say whether a call is
 a pure WebRTC call between two workspace users, a call going out through the PBX, or a call arriving
-from it. `service` is always `'webrtc'` (`CallDirector.ts:196-201`), so it does not answer the
+from it. `service` is always `'webrtc'` (`CallDirector.ts:197-202`), so it does not answer the
 question.
 
 ### The information already exists at dispatch time
@@ -230,8 +251,8 @@ Both contacts are final before either event is built, and their types *are* the 
 | `sip` | `user` | arrived from the PBX |
 
 `sip`/`sip` cannot occur: `parseCallContacts` rejects a non-user caller for an external callee
-(`MediaCallServer.ts:234-237`), and `getCalleeFromInvite` requires a user callee
-(`IncomingSipCall.ts:431`).
+(`MediaCallServer.ts:238-241`), and `getCalleeFromInvite` requires a user callee
+(`IncomingSipCall.ts:435`).
 
 ### Shape
 
@@ -246,7 +267,7 @@ reporting `'webrtc'`, and it keeps meaning the transport.
 
 `origin` is added to `IPreMediaCallCreatedContext` and to the app-facing `IMediaCall`, so pre and
 post events agree. It is **not patchable**: `MediaCallCreatePatch` stays `Pick<..., 'features'>`, and
-`AppListenerManager.getMediaCallCreatePatch` (`:1353-1361`) already drops anything that is not
+`AppListenerManager.getMediaCallCreatePatch` (`:1365-1373`) already drops anything that is not
 `features`.
 
 ### Where it is computed
@@ -272,7 +293,7 @@ because it is derived from data they already carry.
 `divertedBy` landed with #40560 (the RFC 5806 `Diversion` header) and reaches apps on both shapes:
 `IncomingSipCall.getDiversionContactFromInvite` parses the header and resolves the extension to a
 contact (`IncomingSipCall.ts:469-497`); `CallDirector.createCall` hands it to the pre-create hook and
-persists it (`:218,254`); `toAppMediaCall` maps it into `context.call` (`appEvents.ts:64`).
+persists it (`:218,254`); `toAppMediaCall` maps it into `context.call` (`appEvents.ts:90`).
 
 It answers a different question. `origin` says how a call reaches the outside world; `divertedBy`
 says why it arrived at *this* callee instead of the one that was dialled. The two compose: a diverted
@@ -303,30 +324,30 @@ and has no reason to expect two.
 ### How one call becomes two
 
 `executePreMediaCallCreated` has exactly one trigger point — `MediaCallDirector.createCall`
-(`CallDirector.ts:217`, via `runPreCallCreatedHook` → `runPreMediaCallCreatedAppHook`). So a double
+(`CallDirector.ts:218`, via `runPreCallCreatedHook` → `runPreMediaCallCreatedAppHook`). So a double
 execution means `createCall` ran twice. With `VoIP_TeamCollab_SIP_Integration_Enabled` **and**
 `VoIP_TeamCollab_SIP_Integration_For_Internal_Calls` on (`service.ts:431-439` →
 `routeExternally: 'always'`), it does:
 
-1. `user1` presses call → `request-call` → `notifications.module.ts:295` →
+1. `user1` presses call → `request-call` → `notifications.module.ts:299` →
    `GlobalSignalProcessor.processRequestCallSignal` (`internal/SignalProcessor.ts:194`) →
-   `MediaCallServer.requestCall` (`server/MediaCallServer.ts:91`).
+   `MediaCallServer.requestCall` (`server/MediaCallServer.ts:92`).
 2. `parseCallContacts` routes the callee through `getCalleeContactOptions`
-   (`MediaCallServer.ts:283-306`). With internal calls routed externally the option is
+   (`MediaCallServer.ts:287-314`). With internal calls routed externally the option is
    `{ requiredType: 'sip' }`, so `user2` resolves to the **sip contact for their extension**
    (`server/CastDirector.ts:160-167`).
-3. `MediaCallServer.createCall:124` sees `callee.type === 'sip'` → `OutgoingSipCall.createCall`
+3. `MediaCallServer.createCall:128` sees `callee.type === 'sip'` → `OutgoingSipCall.createCall`
    (`sip/providers/OutgoingSipCall.ts:46-77`) → `mediaCallDirector.createCall` → **event run #1**.
 4. `OutgoingSipCall.createDialog:136` INVITEs `sip:<user2 ext>@<SIP_Server_Host>`
    (`sip/Session.ts:102`).
 5. The PBX dialplan resolves that extension back to Rocket.Chat, so drachtio hands the same
    workspace an inbound INVITE: `srf.invite` (`sip/Session.ts:140`) → `processInvite:166` →
-   `IncomingSipCall.processInvite` (`sip/providers/IncomingSipCall.ts:47`), where
-   `getCalleeFromInvite:431` maps the called number to `user2` and `getCallerContactFromInvite:461`
-   rebuilds `user1`'s identity → `mediaCallDirector.createCall:96` → **event run #2**.
+   `IncomingSipCall.processInvite` (`sip/providers/IncomingSipCall.ts:48`), where
+   `getCalleeFromInvite:435` maps the called number to `user2` and `getCallerContactFromInvite:499`
+   rebuilds `user1`'s identity → `mediaCallDirector.createCall:103` → **event run #2**.
 
 Two `IMediaCall` documents result, each holding one real participant: the outbound leg has
-`uids: [user1]` (a sip callee contributes no uid, `CallDirector.ts:244-248`), the inbound leg
+`uids: [user1]` (a sip callee contributes no uid, `CallDirector.ts:245-249`), the inbound leg
 `uids: [user2]`.
 
 The same doubling occurs with only `..._SIP_Integration_Enabled` on, whenever the PBX happens to
@@ -342,11 +363,11 @@ only material an app has is the contacts and the features:
 | --- | --- | --- | --- |
 | `caller.username` | `user1` | `user1` (from `X-RocketChat-Caller-Username`, or resolved from the extension) | yes |
 | `callee.username` | `user2` (sip contact built from the user record) | `user2` | yes |
-| `createdBy.username` | `user1` (the requester) | `user1` (`createdBy = requestedBy \|\| caller`, `CallDirector.ts:214`) | yes |
-| `features` | client list filtered to `SIP_CALL_FEATURES` (`OutgoingSipCall.ts:70`) | `SIP_CALL_FEATURES` verbatim (`IncomingSipCall.ts:102`) | yes, unless the client asked for fewer |
+| `createdBy.username` | `user1` (the requester) | `user1` (`createdBy = requestedBy \|\| caller`, `CallDirector.ts:215`) | yes |
+| `features` | client list filtered to `SIP_CALL_FEATURES` (`OutgoingSipCall.ts:70`) | `SIP_CALL_FEATURES` verbatim (`IncomingSipCall.ts:109`) | yes, unless the client asked for fewer |
 | contact key set | `type,id,username,displayName,sipExtension` | same | yes |
 | `caller.type` / `callee.type` | `user` / `sip` | `sip` / `user` | **no** — mirrored |
-| `createdBy.type` / `.id` | `user` / uid of `user1` | `sip` / `user1`'s extension | **no** — `createdBy` *is* the caller contact on the inbound leg, since `IncomingSipCall` passes no `requestedBy` (`IncomingSipCall.ts:97-102`) |
+| `createdBy.type` / `.id` | `user` / uid of `user1` | `sip` / `user1`'s extension | **no** — `createdBy` *is* the caller contact on the inbound leg, since `IncomingSipCall` passes no `requestedBy` (`IncomingSipCall.ts:104-111`) |
 | `caller.id` / `callee.id` | uid / extension | extension / uid | **no** — mirrored |
 
 The two contexts are distinguishable, just not *linkable*: every difference is the `user`/`sip`
@@ -411,7 +432,7 @@ dispatches**.
 | **Return-type narrowing** | Per-interface restricted union. | Same, on the object method. | **Lost** — enforced against the whole pre-event union, not per `eventType`. | Per-method restricted union, like P1. |
 | **Per-event opt-out** | Don't implement the interface. | Omit the method. | Coarse — a `switch` `default` or a missing case. | Cleanest — omit the method. |
 | **Composition across apps** | Inherited from the listener loop. | **Reimplemented** in a manager-manager fan-out. | Inherited. | Inherited. |
-| **Engine wiring cost** | Full recipe per event. | One-time scaffold, then just add methods. | One-time, per method group. | Full recipe per event, same as P1. |
+| **Engine wiring cost** | Full recipe per event. | One-time scaffold, then just add methods. | One-time, per method group. | One-time scaffold (member, bridge case, envelope, router), then a method plus an envelope union member; a post event needs no manager change. |
 | **Fit with existing architecture** | High — it *is* the events architecture. | Medium — provider registration repurposed for events. | Medium-high — a shape no other RC event surface uses. | High — the listener engine plus a shape RC already has. |
 
 **Why P4.** Media-call events are **broadcast**: every interested app should observe, and several
@@ -421,8 +442,10 @@ P3 keeps the listener engine but trades away per-event return-type narrowing, wh
 restricted unions depend on ([ADR 0002](./0002-unified-event-result-for-pre-events.md), decision 5);
 if two media-call pre-events ever permit different variants, P3 cannot express it. P4 keeps every
 type-level guarantee P1 has, collapses N interfaces into one app-facing surface, and adds no
-conceptual novelty because `IUIKitActionHandler` already has that shape. The price: P4 does **not**
-make the catalog cheaper to grow — every new event is still P1's full wiring recipe.
+conceptual novelty because `IUIKitActionHandler` already has that shape. As built it also grows more
+cheaply than P1, because the envelope dispatch is scaffolded once for the family (decision 2); what it
+gives up in exchange is a per-event `IListenerExecutor` `result` type, since the family shares one
+entry.
 
 A hybrid remains available if both surfaces ever test well: keep P2's author-facing object but have
 its registration fan into the listener manager internally, so composition is not duplicated.
@@ -442,10 +465,10 @@ Leading the query with `{ ended: false, uids: callerUid, expiresAt: { $gt: now }
 existing `{ ended: 1, uids: 1, expiresAt: 1 }` index (`MediaCalls.ts:33`), with the caller/callee
 fields as the residual filter — no new index.
 
-**The ordering is safe.** The outbound document is inserted (`CallDirector.ts:259`) and flipped to
+**The ordering is safe.** The outbound document is inserted (`CallDirector.ts:261`) and flipped to
 `ringing` (`OutgoingSipCall.ts:125`) *before* `createSipDialog` emits the INVITE (`:136`), so the
 record is always present and not-ended when the loop-back arrives. Transfers routed externally
-produce the same outbound-then-loop-back pair (`UserActorAgent.onCallTransferred:146` →
+produce the same outbound-then-loop-back pair (`UserActorAgent.onCallTransferred:134` →
 `requestCall`), so the match must **not** be conditioned on `parentCallId` being absent.
 
 **Why it is rejected.** The rule's only reliable half is the caller/extension match, and it has a
@@ -466,23 +489,39 @@ better app-facing name than a term describing a PBX routing artefact.
 
 ## Adding an event — the wiring recipe
 
-1. `packages/apps-engine/src/definition/metadata/AppInterface.ts` — add the member.
-2. `packages/apps-engine/src/definition/metadata/AppMethod.ts` — add the `CHECK…` / `EXECUTE…`
-   method names.
-3. `packages/apps-engine/src/definition/mediaCalls/` — add the context type and the method on
-   `IMediaCallHandler`.
-4. `packages/apps-engine/src/definition/mediaCalls/index.ts` — export them.
-5. `packages/apps/src/server/managers/AppListenerManager.ts` — add to the `IListenerExecutor` map,
-   add a `case` in `executeListener`, add the private executor loop.
-6. `apps/meteor/app/apps/server/bridges/listeners.ts` — extend the `HandleEvent` union, add the
-   `case`, convert the payload.
-7. Host trigger site — `apps/meteor/server/services/media-call/appEvents.ts`.
-8. `packages/apps/src/converters/` plus the host converter, if the payload needs shape mapping.
-   `AppImplements` detection is automatic via `Object.keys(AppInterface)` — no manual edit.
-9. Rebuild `@rocket.chat/apps`.
+Because of decision 2, a **fifth media-call event** is cheaper than a new event elsewhere in the
+engine: `AppInterface`, the bridge and the `IListenerExecutor` map are already wired for the whole
+family and are not touched again.
 
-For pre-events, additionally return the value up the chain and give the handler its builder or
-extender accessor.
+1. `packages/apps-engine/src/definition/metadata/AppMethod.ts` — add the `EXECUTE…` method name.
+   Media-call events have **no `CHECK…` companion**: the executors call the `EXECUTE…` method
+   directly and read a `JSONRPC_METHOD_NOT_FOUND` rejection as "this app did not implement it",
+   which is what makes every member of `IMediaCallHandler` optional.
+2. `packages/apps-engine/src/definition/mediaCalls/` — add the context type and the method on
+   `IMediaCallHandler`; add the member to the `MediaCallEvent` envelope union in `IMediaCallEvent.ts`.
+3. `packages/apps-engine/src/definition/mediaCalls/index.ts` — export them.
+4. `packages/apps/src/server/managers/AppListenerManager.ts` — **for a post event, nothing**:
+   `executePostMediaCallEvent` dispatches any envelope member it is handed. For a pre event, add a
+   branch to `executeMediaCallEvent` and its own serial executor loop, and widen the
+   `IListenerExecutor` entry's `result` union.
+5. Host trigger site — `apps/meteor/server/services/media-call/appEvents.ts`, plus the emitter or
+   hook subscription in `service.ts`.
+6. Rebuild `@rocket.chat/apps`.
+
+`apps/meteor/app/apps/server/bridges/listeners.ts` needs no edit — its single
+`AppInterface.IMediaCallHandler` case already carries the envelope, and payloads arrive app-shaped
+from `appEvents.ts` rather than through a converter. `AppImplements` detection is automatic via
+`Object.keys(AppInterface)`.
+
+Adding an event under a **new** `AppInterface` member — the recipe every other event family uses —
+additionally costs the enum member, an `IListenerExecutor` entry, a `case` in `executeListener`, the
+`HandleEvent` union and `case` in `listeners.ts`, and a `packages/apps/src/converters/` entry plus
+its host converter if the payload needs shape mapping.
+
+Nothing in the recipe hands the handler an accessor. `app.call(method, context)` passes the context
+alone; the `IRead` / `IHttp` / `IPersistence` / `IModify` parameters on `IMediaCallHandler`'s methods
+are supplied by the app runtime. A media-call event that needed a builder or an extender — as the
+message Modify and Extend events get one — would be new work, not a step here.
 
 ## Follow-ups — the remaining phases
 
@@ -496,10 +535,10 @@ Remaining post-event insertion points:
 
 | Event | Insertion point | Payload available |
 |---|---|---|
-| `IPostMediaCallCreated` | `runOnCallCreatedForAgent` / `agent.onCallCreated` (`CallDirector.ts:356-375`); SIP `IncomingSipCall.ts:119`, `OutgoingSipCall.ts:84` | Full `IMediaCall`, role, contacts |
+| `IPostMediaCallCreated` | `runOnCallCreatedForAgent` / `agent.onCallCreated` (`CallDirector.ts:376-395`); SIP `IncomingSipCall.ts:138`, `OutgoingSipCall.ts:84` | Full `IMediaCall`, role, contacts |
 | `IPostMediaCallRinging` | after `MediaCalls.startRingingById` (`CallSignalProcessor.ts:283-286`) | callId, callee reachability |
-| `IPostMediaCallTransferred` | `CallDirector.transferCall` success (`:273-275`) | transferredBy/To, parentCallId |
-| `IPostMediaCallNegotiated` | `saveWebrtcSession` success (`CallDirector.ts:176-182`) | SDP state, media state, hold — **exposes SDP, see the SDP note below** |
+| `IPostMediaCallTransferred` | `CallDirector.transferCall` success (`:288-295`) | transferredBy/To, parentCallId |
+| `IPostMediaCallNegotiated` | `saveWebrtcSession` success (`CallDirector.ts:179-185`) | SDP state, media state, hold — **exposes SDP, see the SDP note below** |
 | `IPostMediaCallDTMF` | `BroadcastAgent.onDTMF` (`ee/packages/media-calls/src/server/BroadcastAgent.ts:42-44`) | tone, duration |
 
 **`IMediaCallModify`, in rough order of safety:**
@@ -509,7 +548,7 @@ Remaining post-event insertion points:
   real user actions and reuse every existing guard instead of mutating the record. Expose via bridge
   `doHangup` / `doTransfer`, gated by `mediaCall.write`.
 - **`IModifyCreator.startMediaCall()`:** let an app *place* a call, committing via the existing
-  `ModifyCreator.finish()` switch on `RocketChatAssociationModel` (`ModifyCreator.ts:151`). Requires
+  `ModifyCreator.finish()` switch on `RocketChatAssociationModel` (`ModifyCreator.ts:122`). Requires
   a `MEDIA_CALL` association member and routes to `callServer.requestCall`.
 - **`IModifyExtender.extendMediaCall(id)`:** additive metadata only, analogous to
   `extendVideoConference`.
@@ -529,16 +568,17 @@ The worked recipe, from the VideoConference precedent:
 - **Definitions:** create `packages/apps-engine/src/definition/accessors/IMediaCallRead.ts` (mirror
   `IVideoConferenceRead.ts:7-15`); export it from `accessors/index.ts`; add
   `getMediaCallReader(): IMediaCallRead` to `IRead.ts` (mirror `:49`).
-- **Engine:** create `packages/apps/src/server/accessors/MediaCallRead.ts` (mirror
-  `VideoConferenceRead.ts:6-15`); create abstract
+- **Engine:** create `packages/apps/base-runtime/src/lib/accessors/read/MediaCallRead.ts` (mirror
+  `read/VideoConferenceRead.ts:7-13`); create abstract
   `packages/apps/src/server/bridges/MediaCallBridge.ts` with a permission-gated `doGetById` (mirror
   `VideoConferenceBridge.ts:10-95`); export from `bridges/index.ts`; add
-  `abstract getMediaCallBridge()` to `AppBridges.ts:100` and to the `Bridge` union (`:30-55`); wire
-  into `AppAccessorManager.getReader()` (`:178-219`); add the getter to `Reader.ts` (`:79-81`).
+  `abstract getMediaCallBridge()` to `AppBridges.ts:100` and to the `Bridge` union (`:30-55`); pass a
+  `MediaCallRead` into the `Reader` constructed in `accessors/mod.ts:289-305`; add the getter to
+  `read/Reader.ts` (`:79-81`).
 - **Host:** create `apps/meteor/app/apps/server/bridges/mediaCalls.ts` (mirror
   `videoConferences.ts:10-76`) and `apps/meteor/app/apps/server/converters/mediaCalls.ts` (mirror
-  `converters/videoConferences.ts:5-33`); register the bridge in `bridges/bridges.js` and the
-  converter in `orchestrator.js:70`.
+  `converters/videoConferences.ts:8-32`); register the bridge in `bridges/bridges.js` and the
+  converter in `orchestrator.ts:106`.
 - **Cross-cutting:** add `mediaCall: { read, write }` to `AppPermissions.ts:106-110`, plus
   `defaultPermissions` (`:162-164`) if legacy apps should inherit it.
 
@@ -552,20 +592,20 @@ The remaining pre-hooks, wired into `MediaCallDirector` / `MediaCallServer` and 
 
 | Event | Insertion point | What an app could do | Notes |
 |---|---|---|---|
-| `IPreMediaCallRequested` | `MediaCallServer.requestCall` / `parseCallContacts` (`MediaCallServer.ts:86-114`, impl `:161-232`) | Block a call, reroute (change callee), annotate before the call exists | Permission checks already run here (`:176,200,204,208,218`). This is also the high-leverage place to let apps participate in the injected `permissionCheck` / `isFeatureAvailableForUser` policy callbacks (`IMediaCallServer.ts:40-41`), rather than adding a full accessor. |
-| `IPreMediaCallAccepted` | `MediaCallDirector.acceptCall` before `MediaCalls.acceptCallById` (`CallDirector.ts:75`), or `clientHasAccepted` (`CallSignalProcessor.ts:316-322`) | Enforce policy on who may accept | |
-| `IPreMediaCallTransferred` | `MediaCallDirector.transferCall` before `MediaCalls.transferCallById` (`CallDirector.ts:268`) | Veto or redirect the transfer target | |
-| `IPreMediaCallHangup` | `MediaCallDirector.hangup` before `MediaCalls.hangupCallById` (`CallDirector.ts:389`) | Rare | A veto must tolerate server, error and expiry-driven reasons (`:288-312`, `hangupByServer` `:44-46`). |
+| `IPreMediaCallRequested` | `MediaCallServer.requestCall` / `parseCallContacts` (`MediaCallServer.ts:92-123`, impl `:186-262`) | Block a call, reroute (change callee), annotate before the call exists | Permission checks already run here (`:201,225,229,233,243`). This is also the high-leverage place to let apps participate in the injected `permissionCheck` / `isFeatureAvailableForUser` policy callbacks (`IMediaCallServer.ts:79-80`), rather than adding a full accessor. |
+| `IPreMediaCallAccepted` | `MediaCallDirector.acceptCall` before `MediaCalls.acceptCallById` (`CallDirector.ts:76`), or `clientHasAccepted` (`CallSignalProcessor.ts:316-322`) | Enforce policy on who may accept | |
+| `IPreMediaCallTransferred` | `MediaCallDirector.transferCall` before `MediaCalls.transferCallById` (`CallDirector.ts:288`) | Veto or redirect the transfer target | |
+| `IPreMediaCallHangup` | `MediaCallDirector.hangup` before `MediaCalls.hangupCallById` (`CallDirector.ts:409`) | Rare | A veto must tolerate server, error and expiry-driven reasons (`:308-332`, `hangupByServer` `:45-47`). |
 | `IPreMediaCallDTMF` | `processDTMF` (`CallSignalProcessor.ts:274-278`) | Intercept DTMF for IVR-style apps | |
 
 ### Phase 4 — Provide (optional, large)
 
 Pattern B: let an app *back* media calls — an alternate SIP/telephony provider, or supplied
 routing/URLs. Today the SIP-vs-internal fork is hard-coded in `MediaCallServer.createCall`
-(`:116-125`) on `callee.type`. An `IMediaCallProvider` (mirroring `IVideoConfProvider.ts:11-70`)
+(`:125-134`) on `callee.type`. An `IMediaCallProvider` (mirroring `IVideoConfProvider.ts:11-70`)
 with `onCallRequested` / `onCallEnded` / `generateRoute` would require a provider definition, an
 `IMediaCallProvidersExtend` accessor, an `AppMediaCallProviderManager`, a bridge, a host registry,
-and host call sites in `parseCallContacts` (`:161-232`). This is a significant refactor of the
+and host call sites in `parseCallContacts` (`:186-262`). This is a significant refactor of the
 routing layer and should be a separate initiative.
 
 ### Persistence and associations
@@ -584,21 +624,21 @@ them: `INotifier` for ephemeral UI, `ISlashCommandsExtend` (a `/call <user>` com
 UIKit/contextual bar/action buttons (a call-ended handler could open a survey),
 `ISchedulerExtend`/`ISchedulerModify` for reminders and callbacks, and the message hooks — call
 outcomes are written as system messages via `saveCallToHistory` / `sendHistoryMessage`
-(`service.ts:148-296`), which flow through `sendMessage` and therefore through the existing
+(`service.ts:167-315`), which flow through `sendMessage` and therefore through the existing
 `IPreMessageSent*` / `IPostMessageSent` hooks **today**.
 
 ## Cross-cutting concerns for implementers
 
 - **SDP and sensitive data.** Signal payloads and negotiations carry SDP; the engine already strips
   it for logs (`ee/packages/media-calls/src/server/stripSensitiveData.ts:3-24`, applied
-  `MediaCallServer.ts:60`). Any hook or accessor exposing signals or negotiations to apps must apply
+  `MediaCallServer.ts:66`). Any hook or accessor exposing signals or negotiations to apps must apply
   the same stripping and sit behind a distinct permission.
 - **SIP and internal calls are uniform at the director.** Both providers funnel every state change
   through the *same* `MediaCallDirector` methods, so hooks placed there fire uniformly regardless of
-  provider (the fork is only at `MediaCallServer.createCall:116-125`). Place post-hooks in the
+  provider (the fork is only at `MediaCallServer.createCall:125-134`). Place post-hooks in the
   director, not in the agents, to avoid provider-specific gaps.
-- **Non-user-driven transitions.** Expiry (`CallDirector.ts:288-312`), errors and `hangupByServer`
-  (`:44-46`) end calls with no user actor. Hook payloads must tolerate `ServerActor`
+- **Non-user-driven transitions.** Expiry (`CallDirector.ts:308-332`), errors and `hangupByServer`
+  (`:45-47`) end calls with no user actor. Hook payloads must tolerate `ServerActor`
   (`IMediaCall.ts:17-20`) and a non-user `endedBy`.
 - **No multi-party participant model.** Calls are strictly `kind:'direct'` two-actor
   (`IMediaCall.ts:37,44-45`). "Join/leave" maps to reachable/ringing → accept → active → hangup;
@@ -608,7 +648,7 @@ outcomes are written as system messages via `saveCallToHistory` / `sendHistoryMe
   the `BroadcastActorAgent` mechanism. Post-hooks stay fire-and-forget, as the existing listener
   contract is, to avoid adding latency to real-time call signaling.
 - **EE gating.** Media calls are enterprise plus module `teams-voip`
-  (`apps/meteor/ee/server/settings/voip.ts:4-10`). Host trigger sites must be safe when the feature
+  (`apps/meteor/ee/server/settings/voip.ts:7-8`). Host trigger sites must be safe when the feature
   or module is disabled.
 - **Build coupling.** The host imports the engine from `@rocket.chat/apps/dist` — rebuild
   `packages/apps` after engine edits.
@@ -657,14 +697,14 @@ outcomes are written as system messages via `saveCallToHistory` / `sendHistoryMe
 - EE engine definitions: `ee/packages/media-calls/src/definition/{IMediaCallServer,IMediaCallAgent,IMediaCallCastDirector,common}.ts`
 - Signaling protocol and client model: `packages/media-signaling/src/definition/{call/*,signals/*,client.ts}`;
   client runtime `packages/media-signaling/src/lib/{Session,Call,TransportWrapper}.ts`
-- **Integration seam:** `apps/meteor/server/services/media-call/service.ts` (emitter wiring `:36-41`)
+- **Integration seam:** `apps/meteor/server/services/media-call/service.ts` (emitter wiring `:42-54`)
 - Core-service contract: `packages/core-services/src/types/IMediaCallService.ts`; proxy
   `packages/core-services/src/index.ts:194`; event `packages/core-services/src/events/Events.ts:307`
-- Transport: `apps/meteor/server/modules/notifications/notifications.module.ts:290-299`;
+- Transport: `apps/meteor/server/modules/notifications/notifications.module.ts:294-301`;
   `apps/meteor/server/modules/listeners/listeners.module.ts:148-150`; client
   `packages/ui-voip/src/providers/useMediaSessionInstance.ts:287-308`
 - REST: `apps/meteor/server/api/v1/media-calls.ts`
-- Settings and gating: `apps/meteor/ee/server/settings/voip.ts`; permissions in `service.ts:451-459`
+- Settings and gating: `apps/meteor/ee/server/settings/voip.ts`; permissions in `service.ts:470-478`
 - UI: `packages/ui-voip/src/**`
 
 ### apps-engine
@@ -673,13 +713,15 @@ outcomes are written as system messages via `saveCallToHistory` / `sendHistoryMe
 - Handler interface templates: `packages/apps-engine/src/definition/messages/{IPostMessageSent,IPreMessageSentPrevent,IPreMessageSentExtend,IPreMessageSentModify}.ts`
 - Listener manager: `packages/apps/src/server/managers/AppListenerManager.ts`
 - Accessor interfaces: `packages/apps-engine/src/definition/accessors/{IRead,IModify,IVideoConferenceRead,IModifyCreator,IModifyUpdater,IModifyExtender,IModifyDeleter,IPersistence,IPersistenceRead,INotifier}.ts`
-- Accessor impls: `packages/apps/src/server/accessors/{Reader,VideoConferenceRead,RoomRead,ModifyCreator,Persistence,Notifier}.ts`;
-  assembly `packages/apps/src/server/managers/AppAccessorManager.ts`
+- Accessor impls: `packages/apps/base-runtime/src/lib/accessors/read/{Reader,VideoConferenceRead,RoomRead}.ts`,
+  `.../accessors/modify/{ModifyCreator,ModifyUpdater}.ts`, `.../accessors/{Persistence,notifier}.ts`;
+  assembly `packages/apps/base-runtime/src/lib/accessors/mod.ts`
 - Bridges (abstract): `packages/apps/src/server/bridges/{AppBridges,BaseBridge,VideoConferenceBridge,RoomBridge,MessageBridge,ListenerBridge}.ts`
 - Provider pattern (precedent): `packages/apps-engine/src/definition/videoConfProviders/IVideoConfProvider.ts`;
   `packages/apps/src/server/managers/AppVideoConfProviderManager.ts`;
-  `packages/apps/src/server/accessors/VideoConfProviderExtend.ts`
+  `packages/apps-engine/src/definition/accessors/IVideoConfProvidersExtend.ts`, implemented inline in
+  `packages/apps/base-runtime/src/lib/accessors/mod.ts`
 - Associations and permissions: `packages/apps-engine/src/definition/metadata/{RocketChatAssociations,AppPermissions}.ts`
 - Host bridges, converters, orchestrator: `apps/meteor/app/apps/server/bridges/{bridges.js,listeners.ts,videoConferences.ts,messages.ts,rooms.ts}`;
-  `apps/meteor/app/apps/server/converters/*`; `apps/meteor/ee/server/apps/orchestrator.js`
+  `apps/meteor/app/apps/server/converters/*`; `apps/meteor/ee/server/apps/orchestrator.ts`
 - Trigger idiom reference: `apps/meteor/server/lib/messages/sendMessage.ts:241,247-257,287-291`
