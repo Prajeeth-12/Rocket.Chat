@@ -519,8 +519,9 @@ family and are not touched again.
    directly and read a `JSONRPC_METHOD_NOT_FOUND` rejection as "this app did not implement it",
    which is what makes every member of `IMediaCallHandler` optional.
 2. `packages/apps-engine/src/definition/mediaCalls/` — add the context type and the method on
-   `IMediaCallHandler`; add the member to the `MediaCallEvent` envelope union in `IMediaCallEvent.ts`.
-3. `packages/apps-engine/src/definition/mediaCalls/index.ts` — export them.
+   `IMediaCallHandler`; export them from that folder's `index.ts`.
+3. `packages/apps/src/server/mediaCalls/IMediaCallEvent.ts` — add the member to the `MediaCallEvent`
+   envelope union. The envelope is host-side, not app-facing: an app is handed its `context` alone.
 4. `packages/apps/src/server/managers/AppListenerManager.ts` — **for a post event, nothing**:
    `executePostMediaCallEvent` dispatches any envelope member it is handed. For a pre event, add a
    branch to `executeMediaCallEvent` and its own serial executor loop, and widen the
@@ -689,9 +690,12 @@ outcomes are written as system messages via `saveCallToHistory` / `sendHistoryMe
 ## Implementation record
 
 - App-facing definitions: `packages/apps-engine/src/definition/mediaCalls/` — `IMediaCall`
-  (including `MediaCallOrigin`), `IMediaCallHandler`, `IMediaCallEvent`, the four context types,
+  (including `MediaCallOrigin`), `IMediaCallHandler`, the four context types,
   `MediaCallCreateEventResult`, `MediaCallHangupReason` and the `isMissedCall` / `isRejectedCall` /
   `isAnsweredCall` helpers.
+- Host-side envelopes: `packages/apps/src/server/mediaCalls/IMediaCallEvent.ts` — `MediaCallEvent`
+  and `PreMediaCallCreatedOutcome`, re-exported from `@rocket.chat/apps`. Apps never see either, so
+  neither belongs in the package an app imports. See ADR 0002's implementation record.
 - Enums: `packages/apps-engine/src/definition/metadata/{AppInterface,AppMethod}.ts`.
 - Dispatch: `packages/apps/src/server/managers/AppListenerManager.ts`, covered by
   `packages/apps/tests/server/managers/AppListenerManager.mediaCalls.test.ts`. The post events are

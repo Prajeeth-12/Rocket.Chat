@@ -2,11 +2,11 @@
 
 ## Status
 
-**Accepted — partially implemented.** The type, the `EventResult.*` factories and the
-`isEventResult()` guard landed in `packages/apps-engine/src/definition/eventResult/`, and the
-media-call pre-create event is their first consumer (see
-[ADR 0003](./0003-media-call-events-for-apps.md)). Two parts of this decision are deliberately not
-in the code yet:
+**Accepted — partially implemented.** The type and the `EventResult.*` factories landed in
+`packages/apps-engine/src/definition/eventResult/`, the host-side `isEventResult()` guard in
+`packages/apps/src/server/eventResult/`, and the media-call pre-create event is their first consumer
+(see [ADR 0003](./0003-media-call-events-for-apps.md)). Two parts of this decision are deliberately
+not in the code yet:
 
 - **`prompt` has no type definitions.** No event permits it today, and no flow can suspend and
   resume to serve it. The variant is specified below and lands with the first event that needs it —
@@ -454,14 +454,28 @@ widened handlers accept legacy shapes behind the guard-before-legacy ordering.
 
 ## Implementation record
 
+The split follows what an app has to know. `packages/apps-engine/definition/` is what an app
+imports, so it holds the union an author annotates against and the factories that stamp the marker.
+The guard, the host-stamped metadata and the outcome envelopes have no app-side reader, so they live
+in `packages/apps` beside the manager that produces them. The dependency runs one way — `apps` →
+`apps-engine` — so the host side may name the app-facing types and never the reverse.
+
 - `packages/apps-engine/src/definition/eventResult/EventResult.ts` — the `pass | patch | prevent`
   union, the branded per-variant types, `MarkedEventResult`, and the `EventResult.*` factories.
   `prompt` is absent, as recorded in Status.
-- `packages/apps-engine/src/definition/eventResult/isEventResult.ts` — the `@kind` guard.
 - `packages/apps-engine/src/definition/eventResult/index.ts` — exports.
+- `packages/apps/src/server/eventResult/isEventResult.ts` — the `@kind` guard. Host-side: an app
+  produces a marked result with the factories and never has to recognize one. It imports
+  `EVENT_RESULT_KIND` from apps-engine, so the guard and the stamp share one constant.
+- `packages/apps/src/server/eventResult/EventResultMeta.ts` — `EventResultMeta`, what the engine
+  tells the host about the app that produced a result. Stamped by the manager, never sent by an app.
+  See [the prevented-call proposal](../proposals/media-call-prevented-call.md), D2.
 - First consumer: `packages/apps-engine/src/definition/mediaCalls/MediaCallEventResult.ts`
   (`MediaCallCreateEventResult` = `pass | patch | prevent`), dispatched by
   `packages/apps/src/server/managers/AppListenerManager.ts`.
+- The manager's outcome envelopes — `MediaCallEvent` and `PreMediaCallCreatedOutcome` — live beside
+  it in `packages/apps/src/server/mediaCalls/IMediaCallEvent.ts` and are re-exported from
+  `@rocket.chat/apps`. Apps never see them; only the manager and the host read them.
 - The fail-open backstop for an unknown variant lives in that manager's
   `executePreMediaCallCreated` `default` branch, covered by
   `packages/apps/tests/server/managers/AppListenerManager.mediaCalls.test.ts`. The test hand-builds
