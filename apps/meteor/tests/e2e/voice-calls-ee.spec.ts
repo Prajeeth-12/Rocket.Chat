@@ -456,6 +456,7 @@ test.describe('Internal Voice Calls - Docked Widget (call panel) - Enterprise Ed
 
 	test.beforeAll(async ({ api }) => {
 		await Promise.all([
+			setSettingValueById(api, 'Accounts_AllowFeaturePreview', true),
 			api.post('/users.setStatus', { status: 'online', username: 'user1' }),
 			api.post('/users.setStatus', { status: 'online', username: 'user2' }),
 			setUserPreferences(
@@ -482,6 +483,7 @@ test.describe('Internal Voice Calls - Docked Widget (call panel) - Enterprise Ed
 
 	test.afterAll(async ({ api }) => {
 		await Promise.all([
+			setSettingValueById(api, 'Accounts_AllowFeaturePreview', false),
 			...sessions.map(({ page }) => page.close()),
 			setUserPreferences(
 				api,
