@@ -8,15 +8,15 @@ import type {
 	IMediaCallParticipantJoinedContext,
 	IMediaCallStartedContext,
 	IPreMediaCallCreatedContext,
-	MediaCallEvent,
-	PreMediaCallCreatedOutcome,
 } from '@rocket.chat/apps-engine/definition/mediaCalls';
 import { AppInterface, AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
 
 import type { AppManager } from '../../../src/server/AppManager';
 import type { ProxiedApp } from '../../../src/server/ProxiedApp';
 import { AppListenerManager } from '../../../src/server/managers';
+import type { MediaCallEvent, PreMediaCallCreatedOutcome } from '../../../src/server/mediaCalls';
 import { JSONRPC_METHOD_NOT_FOUND } from '../../../src/server/runtime/base/BaseRuntimeSubprocessController';
+import type { IAppStorageItem } from '../../../src/server/storage';
 
 type AppMethodHandlers = Record<string, (...args: any[]) => unknown>;
 
@@ -24,10 +24,16 @@ type AppMethodHandlers = Record<string, (...args: any[]) => unknown>;
  * Every method of `IMediaCallHandler` is optional, and an app that doesn't
  * implement one answers the way the runtime does: a method-not-found error.
  */
-function mockApp(id: string, handlers: AppMethodHandlers): ProxiedApp {
+function mockApp(id: string, handlers: AppMethodHandlers, languageContent: { [language: string]: object } = {}): ProxiedApp {
 	return {
 		getID() {
 			return id;
+		},
+		getName() {
+			return `${id} app`;
+		},
+		getStorageItem() {
+			return { languageContent } as IAppStorageItem;
 		},
 		getImplementationList() {
 			return { [AppInterface.IMediaCallHandler]: true } as { [inte: string]: boolean };
@@ -125,7 +131,7 @@ describe('AppListenerManager media call events', () => {
 
 			assert.deepStrictEqual(outcome, {
 				prevented: true,
-				appId: 'preventing',
+				meta: { app: { id: 'preventing', name: 'preventing app', i18nNamespace: 'app-preventing' } },
 				reason: 'callee is on a do-not-disturb list',
 			});
 			assert.deepStrictEqual(consulted, ['preventing']);
@@ -138,7 +144,84 @@ describe('AppListenerManager media call events', () => {
 				}),
 			]);
 
-			assert.deepStrictEqual(outcome, { prevented: true, appId: 'preventing', i18n: { key: 'callee_is_dnd' } });
+			assert.deepStrictEqual(outcome, {
+				prevented: true,
+				meta: { app: { id: 'preventing', name: 'preventing app', i18nNamespace: 'app-preventing' } },
+				i18n: { key: 'callee_is_dnd' },
+			});
+		});
+
+		/**
+		 * The one key the app named, in every language it ships it in - not the whole catalogue,
+		 * which would cross the boundary on every prevented call.
+		 */
+		it('slices the app translations of the key the result named', async () => {
+			const outcome = await runPreCallCreated([
+				mockApp(
+					'preventing',
+					{ [AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => EventResult.prevent({ i18n: { key: 'callee_is_dnd' } }) },
+					{
+						'en': { callee_is_dnd: 'The callee is on a do-not-disturb list', another_key: 'not asked for' },
+						'pt-BR': { callee_is_dnd: 'O destinatário está em modo não perturbe' },
+						'de': { another_key: 'nicht gefragt' },
+					},
+				),
+			]);
+
+			assert.deepStrictEqual(outcome, {
+				prevented: true,
+				meta: {
+					app: {
+						id: 'preventing',
+						name: 'preventing app',
+						i18nNamespace: 'app-preventing',
+						translations: {
+							'en': 'The callee is on a do-not-disturb list',
+							'pt-BR': 'O destinatário está em modo não perturbe',
+						},
+					},
+				},
+				i18n: { key: 'callee_is_dnd' },
+			});
+		});
+
+		it('leaves the translations out when no language ships the key', async () => {
+			const outcome = await runPreCallCreated([
+				mockApp(
+					'preventing',
+					{ [AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => EventResult.prevent({ i18n: { key: 'callee_is_dnd' } }) },
+					{ en: { another_key: 'not asked for' } },
+				),
+			]);
+
+			assert.deepStrictEqual(outcome, {
+				prevented: true,
+				meta: { app: { id: 'preventing', name: 'preventing app', i18nNamespace: 'app-preventing' } },
+				i18n: { key: 'callee_is_dnd' },
+			});
+		});
+
+		/**
+		 * `isEventResult` only recognizes the marker, so an app can send anything under it. `meta` is
+		 * built from the `ProxiedApp` and overwrites whatever came over the wire.
+		 */
+		it('overwrites a meta the app put under the marker', async () => {
+			const outcome = await runPreCallCreated([
+				mockApp('preventing', {
+					[AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => ({
+						'@kind': EVENT_RESULT_KIND,
+						'type': 'prevent',
+						'reason': 'callee is on a do-not-disturb list',
+						'meta': { app: { id: 'another-app', name: 'Another App' } },
+					}),
+				}),
+			]);
+
+			assert.deepStrictEqual(outcome, {
+				prevented: true,
+				meta: { app: { id: 'preventing', name: 'preventing app', i18nNamespace: 'app-preventing' } },
+				reason: 'callee is on a do-not-disturb list',
+			});
 		});
 
 		it('chains patches, handing each app what the previous one patched', async () => {

@@ -97,6 +97,7 @@ export class MediaCallServer implements IMediaCallServer {
 		} catch (error) {
 			let rejectionReason: CallRejectedReason = 'unsupported';
 			let rejectionMessage: CallRejectionMessage | undefined;
+
 			if (error && typeof error === 'object' && error instanceof CallRejectedError) {
 				rejectionReason = error.callRejectedReason;
 				rejectionMessage = error.rejectionMessage;

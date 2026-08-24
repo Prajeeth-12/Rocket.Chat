@@ -1,3 +1,4 @@
+import type { MediaCallEvent } from '@rocket.chat/apps';
 import {
 	isAnsweredCall,
 	isKnownMediaCallHangupReason,
@@ -9,7 +10,6 @@ import type {
 	IMediaCallEndedContext,
 	IMediaCallParticipantJoinedContext,
 	IMediaCallStartedContext,
-	MediaCallEvent,
 } from '@rocket.chat/apps-engine/definition/mediaCalls';
 import { AppInterface, AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
 import type { IMediaCall } from '@rocket.chat/core-typings';
@@ -404,7 +404,11 @@ describe('media call app events', () => {
 		});
 
 		it('reports the reason an app prevented the call', async () => {
-			triggerEvent.resolves({ prevented: true, appId: 'blocking-app', reason: 'callee is on a do-not-disturb list' });
+			triggerEvent.resolves({
+				prevented: true,
+				meta: { app: { id: 'blocking-app', name: 'Blocking App', i18nNamespace: 'app-blocking-app' } },
+				reason: 'callee is on a do-not-disturb list',
+			});
 
 			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({
 				prevented: true,
@@ -415,10 +419,10 @@ describe('media call app events', () => {
 			expect(loggerMock.info.firstCall.firstArg).to.have.property('appId', 'blocking-app');
 		});
 
-		it('keeps the i18n key and its args, namespaced to the app that produced them', async () => {
+		it('keeps the i18n key and its args, in the namespace the apps platform reported', async () => {
 			triggerEvent.resolves({
 				prevented: true,
-				appId: 'blocking-app',
+				meta: { app: { id: 'blocking-app', name: 'Blocking App', i18nNamespace: 'app-blocking-app' } },
 				i18n: { key: 'callee_is_dnd', args: { username: 'callee' } },
 			});
 

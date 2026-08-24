@@ -20,4 +20,3 @@ export { isMissedCall, isRejectedCall, isAnsweredCall } from './helpers';
 export type { IUnansweredMediaCallEndedContext, IAnsweredMediaCallEndedContext, IRejectedMediaCallEndedContext } from './helpers';
 export type { MediaCallCreateEventResult } from './MediaCallEventResult';
 export type { IMediaCallHandler } from './IMediaCallHandler';
-export type { MediaCallEvent, PreMediaCallCreatedOutcome } from './IMediaCallEvent';

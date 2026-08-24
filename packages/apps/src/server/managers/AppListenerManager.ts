@@ -1,6 +1,5 @@
 import type { IEmailDescriptor, IPreEmailSentContext } from '@rocket.chat/apps-engine/definition/email';
 import type { MarkedEventResult } from '@rocket.chat/apps-engine/definition/eventResult';
-import { isEventResult } from '@rocket.chat/apps-engine/definition/eventResult';
 import { EssentialAppDisabledException } from '@rocket.chat/apps-engine/definition/exceptions';
 import type { IExternalComponent } from '@rocket.chat/apps-engine/definition/externalComponent';
 import type {
@@ -10,12 +9,7 @@ import type {
 	IVisitor,
 } from '@rocket.chat/apps-engine/definition/livechat';
 import type { ILivechatDepartmentEventContext } from '@rocket.chat/apps-engine/definition/livechat/ILivechatEventContext';
-import type {
-	IPreMediaCallCreatedContext,
-	MediaCallCreatePatch,
-	MediaCallEvent,
-	PreMediaCallCreatedOutcome,
-} from '@rocket.chat/apps-engine/definition/mediaCalls';
+import type { IPreMediaCallCreatedContext } from '@rocket.chat/apps-engine/definition/mediaCalls';
 import type {
 	IMessage,
 	IMessageDeleteContext,
@@ -41,6 +35,9 @@ import type { IUser, IUserContext, IUserStatusContext, IUserUpdateContext } from
 
 import type { AppManager } from '../AppManager';
 import type { ProxiedApp } from '../ProxiedApp';
+import { isEventResult, makeHostEventResult } from '../eventResult';
+import type { MediaCallEvent, PreMediaCallCreatedOutcome } from '../mediaCalls';
+import { getMediaCallCreatePatch } from '../mediaCalls';
 import { Utilities } from '../misc/Utilities';
 import { JSONRPC_METHOD_NOT_FOUND } from '../runtime/base/BaseRuntimeSubprocessController';
 
@@ -1333,16 +1330,18 @@ export class AppListenerManager {
 				continue;
 			}
 
-			switch (result.type) {
+			const hostResult = makeHostEventResult(app, result);
+
+			switch (hostResult.type) {
 				case 'prevent':
 					return {
 						prevented: true,
-						appId,
-						...('reason' in result && { reason: result.reason }),
-						...('i18n' in result && { i18n: result.i18n }),
+						meta: hostResult.meta,
+						...(hostResult.reason !== undefined && { reason: hostResult.reason }),
+						...(hostResult.i18n && { i18n: hostResult.i18n }),
 					};
 				case 'patch':
-					context = { ...context, ...this.getMediaCallCreatePatch(appId, result.patch) };
+					context = { ...context, ...getMediaCallCreatePatch(appId, hostResult.patch) };
 					break;
 				case 'pass':
 					break;
@@ -1352,36 +1351,13 @@ export class AppListenerManager {
 					// is a JSON-RPC payload the types never got to check.
 					console.warn(
 						`App ${appId} returned an unsupported EventResult from ${AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED}: ${
-							(result as MarkedEventResult).type
+							(hostResult as MarkedEventResult).type
 						}`,
 					);
 			}
 		}
 
 		return { prevented: false, context };
-	}
-
-	/**
-	 * Contacts are the outcome of routing and of permission checks, so only features may be patched.
-	 *
-	 * `isEventResult` only recognizes the marker, so the payload under it is still whatever the app
-	 * sent over JSON-RPC: it has a type here, but nothing ever checked it. A patch that carries
-	 * nothing usable changes nothing, exactly like `pass`.
-	 */
-	private getMediaCallCreatePatch(appId: string, patch: unknown): Partial<MediaCallCreatePatch> {
-		if (typeof patch !== 'object' || patch === null) {
-			console.warn(`App ${appId} returned a media call patch that is not an object: ${patch === null ? 'null' : typeof patch}`);
-			return {};
-		}
-
-		const { features, ...rest } = patch as Partial<MediaCallCreatePatch>;
-		const unsupported = Object.keys(rest);
-
-		if (unsupported.length) {
-			console.warn(`App ${appId} tried to patch unsupported media call properties: ${unsupported.join(', ')}`);
-		}
-
-		return Array.isArray(features) ? { features } : {};
 	}
 
 	private async executePostMediaCallEvent(

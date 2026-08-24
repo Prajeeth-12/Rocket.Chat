@@ -225,6 +225,7 @@ class MediaCallDirector {
 
 		// Last look before the call exists: the host may still block it or change the requested features
 		const hookResult = await getMediaCallServer().runPreCallCreatedHook({ caller, callee, createdBy, features, parentCallId, divertedBy });
+
 		if (hookResult.prevented) {
 			logger.info({
 				msg: 'Call creation was prevented',

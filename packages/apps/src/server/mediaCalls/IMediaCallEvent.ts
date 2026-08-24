@@ -1,9 +1,12 @@
-import type { IMediaCallEndedContext } from './IMediaCallEndedContext';
-import type { IMediaCallParticipantJoinedContext } from './IMediaCallParticipantJoinedContext';
-import type { IMediaCallStartedContext } from './IMediaCallStartedContext';
-import type { IPreMediaCallCreatedContext } from './IPreMediaCallCreatedContext';
-import type { I18nMessage } from '../eventResult';
-import type { AppMethod } from '../metadata';
+import type {
+	IMediaCallEndedContext,
+	IMediaCallParticipantJoinedContext,
+	IMediaCallStartedContext,
+	IPreMediaCallCreatedContext,
+} from '@rocket.chat/apps-engine/definition/mediaCalls';
+import type { AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
+
+import type { PreventedEventResult } from '../eventResult';
 
 /**
  * Envelope used to dispatch a media-call event to the apps that implement
@@ -27,13 +30,7 @@ export type MediaCallEvent =
  * them.
  */
 export type PreMediaCallCreatedOutcome =
-	| {
-			prevented: true;
-			/** The app that prevented the call. */
-			appId: string;
-			reason?: string;
-			i18n?: I18nMessage;
-	  }
+	| ({ prevented: true } & PreventedEventResult)
 	| {
 			prevented: false;
 			context: IPreMediaCallCreatedContext;

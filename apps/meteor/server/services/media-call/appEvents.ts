@@ -1,4 +1,5 @@
 import { AppEvents, Apps } from '@rocket.chat/apps';
+import type { MediaCallEvent, PreMediaCallCreatedOutcome } from '@rocket.chat/apps';
 import type {
 	IAcceptedMediaCall as IAppsAcceptedMediaCall,
 	IActiveMediaCall as IAppsActiveMediaCall,
@@ -7,9 +8,7 @@ import type {
 	IMediaCallActor as IAppsMediaCallActor,
 	IMediaCallContact as IAppsMediaCallContact,
 	IPreMediaCallCreatedContext,
-	MediaCallEvent,
 	MediaCallOrigin,
-	PreMediaCallCreatedOutcome,
 } from '@rocket.chat/apps-engine/definition/mediaCalls';
 import { AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
 import type { IMediaCall, MediaCallActor, MediaCallContact, ServerActor } from '@rocket.chat/core-typings';
@@ -198,16 +197,15 @@ const MAX_REJECTION_TEXT_LENGTH = 200;
 
 /**
  * Turns what an app said about a call it blocked into something the caller can
- * be shown. An app's translations are registered on the client under a namespace
- * of its own, so an `i18n` key is only resolvable together with the id of the app
- * that produced it.
+ * be shown. The apps platform reports the namespace the app's key resolves in, so
+ * the message is passed on rather than assembled here.
  */
 function toRejectionMessage(outcome: PreMediaCallCreatedOutcome & { prevented: true }): CallRejectionMessage | undefined {
 	if (outcome.i18n) {
 		return {
 			type: 'i18n',
 			key: outcome.i18n.key,
-			ns: `app-${outcome.appId}`,
+			ns: outcome.meta.app.i18nNamespace,
 			...(outcome.i18n.args && { args: outcome.i18n.args }),
 		};
 	}
@@ -252,7 +250,7 @@ export async function runPreMediaCallCreatedAppHook(params: PreCallCreatedHookPa
 	if (outcome.prevented) {
 		logger.info({
 			msg: 'An app prevented a media call from being created',
-			appId: outcome.appId,
+			appId: outcome.meta.app.id,
 			reason: outcome.reason || outcome.i18n?.key,
 		});
 
