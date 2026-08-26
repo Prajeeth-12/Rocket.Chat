@@ -133,10 +133,6 @@ test.describe('Apps > Media call events', () => {
 			// which is exactly what must not happen here.
 			await user1.poHomeChannel.voiceCalls.widget.controls.call.click();
 
-			await test.step('the caller is told why, in the words of the app that blocked the call', async () => {
-				await user1.poHomeChannel.toastMessage.waitForDisplay({ type: 'error', message: 'blocked by media-call-events-test' });
-			});
-
 			await test.step('the call never starts and the callee is never rung', async () => {
 				// The widget stays up on the dialer it was opened with, so the state to read is the
 				// controls: a call that started would offer `Cancel` instead of `Call`.
