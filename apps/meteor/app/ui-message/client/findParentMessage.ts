@@ -1,8 +1,9 @@
 import type { IMessage } from '@rocket.chat/core-typings';
 
-import { callWithErrorHandling } from '../../../client/lib/utils/callWithErrorHandling';
+import { mapMessageFromApi } from '../../../client/lib/utils/mapMessageFromApi';
 import { Messages } from '../../../client/stores';
 import { withDebouncing } from '../../../lib/utils/highOrderFunctions';
+import { sdk } from '../../utils/client/lib/SDKClient';
 
 export const findParentMessage = (() => {
 	const waiting: string[] = [];
@@ -12,9 +13,15 @@ export const findParentMessage = (() => {
 	});
 
 	const getMessages = withDebouncing({ wait: 500 })(async () => {
-		const _tmp = [...waiting];
+		const messageIds = [...waiting];
 		waiting.length = 0;
-		resolve(callWithErrorHandling('getMessages', _tmp));
+
+		resolve(
+			messageIds.length
+				? sdk.rest.post('/v1/chat.getMessages', { messageIds }).then(({ messages }) => messages.map((msg) => mapMessageFromApi(msg)))
+				: [],
+		);
+
 		pending = new Promise<IMessage[]>((r) => {
 			resolve = r;
 		});
