@@ -1,4 +1,4 @@
-import type { IMediaCall, IUser, MediaCallContact } from '@rocket.chat/core-typings';
+import type { CallPreventionRecord, IMediaCall, IUser, MediaCallContact } from '@rocket.chat/core-typings';
 import type { Emitter } from '@rocket.chat/emitter';
 import type { CallFeature, ClientMediaSignal, ClientMediaSignalBody, ServerMediaSignal } from '@rocket.chat/media-signaling';
 
@@ -36,6 +36,11 @@ export type PreCallCreatedHookResult =
 			prevented: true;
 			/** Recorded in the server logs, not shown to anyone. */
 			reason?: string;
+			/**
+			 * Kept on the call the refusal writes, and read by every surface that reports it later.
+			 * A hook that prevents a call always names what refused it and why.
+			 */
+			preventedBy: CallPreventionRecord;
 	  }
 	| {
 			prevented: false;

@@ -1,6 +1,7 @@
 import { randomUUID } from 'node:crypto';
 
 import type {
+	CallPreventionRecord,
 	IMediaCall,
 	IMediaCallNegotiation,
 	MediaCallContact,
@@ -28,8 +29,54 @@ export type CreateCallParams = InternalCallParams & {
 	calleeAgent: IMediaCallAgent;
 };
 
+/** Everything it takes to say which call attempt this is, before anyone knows whether it happens. */
+type CallIdentityParams = Pick<CreateCallParams, 'caller' | 'callee' | 'requestedCallId' | 'parentCallId' | 'divertedBy'> & {
+	createdBy: MediaCallContact;
+	service: IMediaCall['service'];
+};
+
+/**
+ * What is left of a call request once an app has refused it: the parties, what the request said,
+ * and what refused it. No agent, because neither side is ever going to be signalled.
+ */
+export type PreventedCallParams = CallIdentityParams & {
+	preventedBy: CallPreventionRecord;
+};
+
 // expiration checks by call id
 const scheduledExpirationChecks = new Map<string, ReturnType<typeof setTimeout>>();
+
+/**
+ * The fields that identify a call attempt, whether or not the call goes on to happen. What
+ * separates a call that rings from one an app refused is its lifecycle - the state, the expiration
+ * and the features - and none of that is here.
+ */
+function getCallIdentity(params: CallIdentityParams) {
+	const { caller, callee, createdBy, service, requestedCallId, parentCallId, divertedBy } = params;
+
+	return {
+		// Use UUIDs to identify all media calls, for better compatibility with libs that require it (such as React Native's CallKit)
+		_id: randomUUID(),
+		service,
+		kind: 'direct' as const,
+
+		createdBy,
+		createdAt: new Date(),
+
+		caller,
+		callee,
+
+		uids: [
+			// add actor ids to uids field if their type is 'user', to make it easy to identify any call an user was part of
+			...(caller.type === 'user' ? [caller.id] : []),
+			...(callee.type === 'user' ? [callee.id] : []),
+		],
+
+		...(requestedCallId && { callerRequestedId: requestedCallId }),
+		...(parentCallId && { parentCallId }),
+		...(divertedBy && { divertedBy }),
+	};
+}
 
 /**
  * What the transport can carry is not up for negotiation: a call that goes through the PBX only
@@ -194,9 +241,48 @@ class MediaCallDirector {
 		await fromAgent.oppositeAgent?.onRemoteDescriptionChanged(call._id, negotiation._id);
 	}
 
+	/**
+	 * Writes down a call an app refused. Nobody's device rang and no audio path was ever opened,
+	 * but the workspace still keeps a record of the attempt, and every surface that reports one
+	 * reads an `IMediaCall`.
+	 *
+	 * The row is inserted already ended and already expired, in one write. Every scan of the
+	 * collection filters on `ended: false`, so an unended row - or one ended in a second write
+	 * that fails - would leave both parties permanently unable to place or receive a call, with
+	 * no expiry to rescue them.
+	 */
+	private async recordPreventedCall(params: PreventedCallParams): Promise<void> {
+		const { preventedBy } = params;
+
+		const now = new Date();
+		const call: Omit<IMediaCall, '_updatedAt'> = {
+			...getCallIdentity(params),
+
+			state: 'hangup',
+
+			ended: true,
+			endedBy: { type: 'server', id: 'server' },
+			endedAt: now,
+			expiresAt: now,
+
+			// No feature was ever negotiated, and none may be used on a call that will not happen
+			features: [],
+
+			preventedBy,
+		};
+
+		logger.debug({ msg: 'recording a prevented call', call });
+
+		const insertResult = await MediaCalls.insertOne(call);
+		if (!insertResult.insertedId) {
+			throw new Error('failed-to-record-prevented-call');
+		}
+
+		getMediaCallServer().updateCallHistory({ callId: insertResult.insertedId });
+	}
+
 	public async createCall(params: CreateCallParams): Promise<IMediaCall> {
-		const { caller, callee, requestedCallId, requestedService, callerAgent, calleeAgent, parentCallId, requestedBy, features, divertedBy } =
-			params;
+		const { caller, callee, requestedService, callerAgent, calleeAgent, parentCallId, requestedBy, features, divertedBy } = params;
 
 		// The caller must always have a contract to create the call
 		if (!caller.contractId) {
@@ -233,35 +319,28 @@ class MediaCallDirector {
 				callerType: caller.type,
 				calleeType: callee.type,
 			});
-			throw new CallRejectedError('forbidden', hookResult.reason, hookResult.message);
+
+			// The record is a consequence of the refusal, not a part of it: the caller is told the
+			// same thing whether or not it lands.
+			await this.recordPreventedCall({
+				...params,
+				createdBy,
+				service,
+				preventedBy: hookResult.preventedBy,
+			}).catch((err) => logger.error({ msg: 'Failed to record a prevented call', err, callerType: caller.type, calleeType: callee.type }));
+
+			throw new CallRejectedError('forbidden', hookResult.reason);
 		}
 
 		const requestedFeatures = getFeaturesSupportedByTransport(caller, callee, hookResult.features || features);
 		const allowedFeatures = requestedFeatures.filter((feature) => getMediaCallServer().isFeatureAvailableForUser(caller.id, feature));
 		const call: Omit<IMediaCall, '_updatedAt'> = {
-			// Use UUIDs to identify all media calls, for better compatibility with libs that require it (such as React Native's CallKit)
-			_id: randomUUID(),
-			service,
-			kind: 'direct',
+			...getCallIdentity({ ...params, createdBy, service }),
+
 			state: 'none',
 
-			createdBy,
-			createdAt: new Date(),
-
-			caller,
-			callee,
-
-			expiresAt: this.getNewExpirationTime(),
-			uids: [
-				// add actor ids to uids field if their type is 'user', to make it easy to identify any call an user was part of
-				...(caller.type === 'user' ? [caller.id] : []),
-				...(callee.type === 'user' ? [callee.id] : []),
-			],
 			ended: false,
-
-			...(requestedCallId && { callerRequestedId: requestedCallId }),
-			...(parentCallId && { parentCallId }),
-			...(divertedBy && { divertedBy }),
+			expiresAt: this.getNewExpirationTime(),
 
 			features: allowedFeatures,
 		};

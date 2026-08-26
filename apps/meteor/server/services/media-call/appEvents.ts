@@ -1,5 +1,5 @@
 import { AppEvents, Apps } from '@rocket.chat/apps';
-import type { MediaCallEvent, PreMediaCallCreatedOutcome } from '@rocket.chat/apps';
+import type { EventResultMeta, MediaCallEvent, PreMediaCallCreatedOutcome } from '@rocket.chat/apps';
 import type {
 	IAcceptedMediaCall as IAppsAcceptedMediaCall,
 	IActiveMediaCall as IAppsActiveMediaCall,
@@ -11,11 +11,13 @@ import type {
 	MediaCallOrigin,
 } from '@rocket.chat/apps-engine/definition/mediaCalls';
 import { AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
-import type { IMediaCall, MediaCallActor, MediaCallContact, ServerActor } from '@rocket.chat/core-typings';
+import type { CallPreventionRecord, IMediaCall, MediaCallActor, MediaCallContact, ServerActor } from '@rocket.chat/core-typings';
 import type { PreCallCreatedHookParams, PreCallCreatedHookResult } from '@rocket.chat/media-calls';
-import { callFeatureList, type CallFeature, type CallRejectionMessage } from '@rocket.chat/media-signaling';
+import { callFeatureList, type CallFeature } from '@rocket.chat/media-signaling';
 
 import { logger } from './logger';
+import { i18n } from '../../lib/i18n';
+import { settings } from '../../settings';
 
 /**
  * Maps media calls onto the shapes apps see and dispatches the media-call
@@ -192,25 +194,80 @@ export async function notifyAppsOfMediaCallEnded(call: IMediaCall): Promise<void
 	});
 }
 
-/** An app's explanation is shown in a toast, so it can't be allowed to be arbitrarily long. */
-const MAX_REJECTION_TEXT_LENGTH = 200;
+/**
+ * The stored copy of an app's explanation is the only copy once the app is gone, so it can't be
+ * allowed to be arbitrarily long.
+ */
+const MAX_PREVENTION_TEXT_LENGTH = 200;
+
+function getWorkspaceLanguage(): string {
+	return settings.get<string>('Language') || 'en';
+}
+
+/** The workspace's own sentence, for an app that prevented a call and left nothing readable behind. */
+function preventedByAppText(appName: string): string {
+	return i18n.t('Prevented_by_app', { lng: getWorkspaceLanguage(), replace: { appName }, interpolation: { escapeValue: false } });
+}
 
 /**
- * Turns what an app said about a call it blocked into something the caller can
- * be shown. The apps platform reports the namespace the app's key resolves in, so
- * the message is passed on rather than assembled here.
+ * What a reader sees once the app is uninstalled and takes its i18n namespace with it: the app's
+ * own wording for the key it named, in the language the workspace runs in, ready to read on its
+ * own. An app that ships no translation for that key has nothing to snapshot, so the workspace
+ * answers for it - a raw key is never what a reader is left with.
+ *
+ * The lookup always misses: an app's namespace is never registered on the server, so `t` falls
+ * through to the wording and interpolates that instead. Escaping stays off to match the client,
+ * which renders through React and turns it off too - otherwise an `&` in an argument would read
+ * differently before and after the app is uninstalled.
+ *
+ * Plural suffixes are not consulted, so an explanation whose wording changes with a number reads
+ * in the form the app shipped under the bare key.
  */
-function toRejectionMessage(outcome: Extract<PreMediaCallCreatedOutcome, { type: 'prevent' }>): CallRejectionMessage {
+function resolveFallbackText(app: EventResultMeta['app'], key: string, args?: Record<string, string | number>): string {
+	const lng = getWorkspaceLanguage();
+	const wording = app.translations?.[lng] ?? app.translations?.en;
+
+	if (!wording) {
+		logger.warn({ msg: 'An app prevented a media call with a key it ships no translation for', appId: app.id, key });
+	}
+
+	const text = wording
+		? i18n.t(key, {
+				lng,
+				ns: app.i18nNamespace,
+				defaultValue: wording,
+				// `replace` keeps the app's argument names from colliding with i18next's own options
+				replace: args ?? {},
+				interpolation: { escapeValue: false },
+			})
+		: preventedByAppText(app.name);
+
+	return text.slice(0, MAX_PREVENTION_TEXT_LENGTH);
+}
+
+/**
+ * Turns what an app said about a call it prevented into the record kept on the call.
+ *
+ * An app that names a key gets the key stored, so that a reader sees the explanation in their own
+ * language for as long as the app is installed, and a snapshot stored beside it for after that.
+ */
+function toPreventionRecord(outcome: Extract<PreMediaCallCreatedOutcome, { type: 'prevent' }>): CallPreventionRecord {
+	const { app } = outcome.meta;
+	const who = { appId: app.id, appName: app.name };
+
 	if ('i18n' in outcome) {
+		const { key, args } = outcome.i18n;
+
 		return {
-			type: 'i18n',
-			key: outcome.i18n.key,
-			ns: outcome.meta.app.i18nNamespace,
-			...(outcome.i18n.args && { args: outcome.i18n.args }),
+			...who,
+			key,
+			ns: app.i18nNamespace,
+			...(args && { args }),
+			fallbackText: resolveFallbackText(app, key, args),
 		};
 	}
 
-	return { type: 'text', text: outcome.reason.slice(0, MAX_REJECTION_TEXT_LENGTH) };
+	return { ...who, text: outcome.reason.slice(0, MAX_PREVENTION_TEXT_LENGTH) };
 }
 
 /**
@@ -256,7 +313,7 @@ export async function runPreMediaCallCreatedAppHook(params: PreCallCreatedHookPa
 		return {
 			prevented: true,
 			reason: reason || i18nKey,
-			message: toRejectionMessage(outcome),
+			preventedBy: toPreventionRecord(outcome),
 		};
 	}
 

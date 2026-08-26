@@ -1,4 +1,5 @@
 ---
+'@rocket.chat/core-typings': minor
 '@rocket.chat/media-signaling': minor
 '@rocket.chat/media-calls': minor
 '@rocket.chat/ui-voip': minor
@@ -6,4 +7,4 @@
 '@rocket.chat/meteor': minor
 ---
 
-Tells the caller why a voice call they placed was rejected, instead of showing the call widget for an instant and nothing else. An app that blocks a call through `IMediaCallHandler` can now have its own message shown to the caller, and rejections the server was already sending — the callee being unavailable, the caller not being allowed to place the call — are explained rather than silent
+Keeps a record of a voice call an app prevented. The call is written down as it is refused - already ended, carrying the app that refused it and the explanation it gave - so the attempt reaches the call history and the direct message the same way every other ended call does. Nothing interrupts the caller: the words are kept on the call instead of being shown as a toast

@@ -23,11 +23,26 @@ import sinon from 'sinon';
 const triggerEvent = sinon.stub();
 const AppsMock: { self: { triggerEvent: sinon.SinonStub } | undefined } = { self: { triggerEvent } };
 const loggerMock = { warn: sinon.stub(), info: sinon.stub() };
+const settingsMock = { get: sinon.stub().returns('en') };
+
+/**
+ * Enough of i18next to answer the two lookups the host makes: the workspace's own key, and an
+ * app key that always misses and falls through to the wording passed as `defaultValue`.
+ */
+const i18nMock = {
+	t: (key: string, options: { defaultValue?: string; replace?: Record<string, string | number> }) => {
+		const wording = key === 'Prevented_by_app' ? 'Prevented by {{appName}}' : (options.defaultValue ?? key);
+
+		return wording.replace(/\{\{(\w+)\}\}/g, (match: string, name: string) => String(options.replace?.[name] ?? match));
+	},
+};
 
 const { notifyAppsOfMediaCallStarted, notifyAppsOfMediaCallParticipantJoined, notifyAppsOfMediaCallEnded, runPreMediaCallCreatedAppHook } =
 	proxyquire.noCallThru().load('../../../../../server/services/media-call/appEvents', {
 		'@rocket.chat/apps': { Apps: AppsMock, AppEvents: AppInterface },
 		'./logger': { logger: loggerMock },
+		'../../lib/i18n': { i18n: i18nMock },
+		'../../settings': { settings: settingsMock },
 	});
 
 /**
@@ -413,24 +428,86 @@ describe('media call app events', () => {
 			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({
 				prevented: true,
 				reason: 'callee is on a do-not-disturb list',
-				message: { type: 'text', text: 'callee is on a do-not-disturb list' },
+				preventedBy: { appId: 'blocking-app', appName: 'Blocking App', text: 'callee is on a do-not-disturb list' },
 			});
 			expect(loggerMock.info.callCount).to.equal(1);
 			expect(loggerMock.info.firstCall.firstArg).to.have.property('appId', 'blocking-app');
 		});
 
-		it('keeps the i18n key and its args, in the namespace the apps platform reported', async () => {
+		it('caps the copy it keeps of what an app said', async () => {
 			triggerEvent.resolves({
 				type: 'prevent',
 				meta: { app: { id: 'blocking-app', name: 'Blocking App', i18nNamespace: 'app-blocking-app' } },
+				reason: 'x'.repeat(500),
+			});
+
+			const result = await runPreMediaCallCreatedAppHook(hookParams());
+
+			// The stored copy is the only copy once the app is gone, so it can't grow without a bound
+			expect(result.preventedBy.text).to.have.lengthOf(200);
+		});
+
+		it('keeps the i18n key and its args, in the namespace the apps platform reported', async () => {
+			triggerEvent.resolves({
+				type: 'prevent',
+				meta: {
+					app: {
+						id: 'blocking-app',
+						name: 'Blocking App',
+						i18nNamespace: 'app-blocking-app',
+						translations: { 'en': '{{username}} does not take calls', 'pt-BR': '{{username}} nao atende chamadas' },
+					},
+				},
 				i18n: { key: 'callee_is_dnd', args: { username: 'callee' } },
 			});
 
 			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({
 				prevented: true,
 				reason: 'callee_is_dnd',
-				message: { type: 'i18n', key: 'callee_is_dnd', ns: 'app-blocking-app', args: { username: 'callee' } },
+				preventedBy: {
+					appId: 'blocking-app',
+					appName: 'Blocking App',
+					key: 'callee_is_dnd',
+					ns: 'app-blocking-app',
+					args: { username: 'callee' },
+					fallbackText: 'callee does not take calls',
+				},
 			});
+		});
+
+		it('snapshots the app wording in the language the workspace runs in', async () => {
+			settingsMock.get.returns('pt-BR');
+			triggerEvent.resolves({
+				type: 'prevent',
+				meta: {
+					app: {
+						id: 'blocking-app',
+						name: 'Blocking App',
+						i18nNamespace: 'app-blocking-app',
+						translations: { 'en': 'no calls', 'pt-BR': 'sem chamadas' },
+					},
+				},
+				i18n: { key: 'callee_is_dnd' },
+			});
+
+			const result = await runPreMediaCallCreatedAppHook(hookParams());
+
+			expect(result.preventedBy.fallbackText).to.equal('sem chamadas');
+			settingsMock.get.returns('en');
+		});
+
+		it('answers for an app that named a key it ships no translation for', async () => {
+			triggerEvent.resolves({
+				type: 'prevent',
+				meta: { app: { id: 'blocking-app', name: 'Blocking App', i18nNamespace: 'app-blocking-app' } },
+				i18n: { key: 'callee_is_dnd' },
+			});
+
+			const result = await runPreMediaCallCreatedAppHook(hookParams());
+
+			// A raw key must never be what a reader is left with
+			expect(result.preventedBy.fallbackText).to.equal('Prevented by Blocking App');
+			expect(loggerMock.warn.callCount).to.equal(1);
 		});
 
 		it('keeps the requested features when every app passed', async () => {
