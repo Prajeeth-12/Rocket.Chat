@@ -3,7 +3,6 @@ import { Emitter } from '@rocket.chat/emitter';
 import type {
 	CallFeature,
 	CallRejectedReason,
-	CallRejectionMessage,
 	ClientMediaSignal,
 	ClientMediaSignalBody,
 	ServerMediaSignal,
@@ -96,11 +95,9 @@ export class MediaCallServer implements IMediaCallServer {
 			await this.createCall(fullParams);
 		} catch (error) {
 			let rejectionReason: CallRejectedReason = 'unsupported';
-			let rejectionMessage: CallRejectionMessage | undefined;
 
 			if (error && typeof error === 'object' && error instanceof CallRejectedError) {
 				rejectionReason = error.callRejectedReason;
-				rejectionMessage = error.rejectionMessage;
 			} else {
 				logger.error({ msg: 'Failed to create a requested call', params, err: error });
 			}
@@ -115,7 +112,6 @@ export class MediaCallServer implements IMediaCallServer {
 					callId: originalId,
 					toContractId: params.requestedBy.contractId,
 					reason: rejectionReason,
-					...(rejectionMessage && { message: rejectionMessage }),
 				});
 			} else {
 				throw error;

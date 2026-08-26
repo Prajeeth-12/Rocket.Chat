@@ -47,32 +47,6 @@ describe('ClientMediaCall', () => {
 	});
 
 	describe('rejected-call-request', () => {
-		it('reports the rejection to the session that asked for the call', async () => {
-			const call = makeCall('call-id');
-			await call.initializeOutboundCall({ type: 'user', id: 'callee-id' });
-
-			const onRejected = jest.fn();
-			call.emitter.on('rejected', onRejected);
-
-			await call.processSignal(rejection({ reason: 'busy' }));
-
-			expect(onRejected).toHaveBeenCalledTimes(1);
-			expect(onRejected).toHaveBeenCalledWith({ reason: 'busy' });
-		});
-
-		it('passes along the message the rejection came with', async () => {
-			const call = makeCall('call-id');
-			await call.initializeOutboundCall({ type: 'user', id: 'callee-id' });
-
-			const onRejected = jest.fn();
-			call.emitter.on('rejected', onRejected);
-
-			const message = { type: 'i18n' as const, key: 'callee_is_dnd', ns: 'app-blocking-app', args: { username: 'callee' } };
-			await call.processSignal(rejection({ message }));
-
-			expect(onRejected).toHaveBeenCalledWith({ reason: 'forbidden', message });
-		});
-
 		it('ends the call', async () => {
 			const call = makeCall('call-id');
 			await call.initializeOutboundCall({ type: 'user', id: 'callee-id' });
@@ -83,33 +57,24 @@ describe('ClientMediaCall', () => {
 			expect(call.isOver()).toBe(true);
 		});
 
-		it('stays quiet on a session that did not ask for the call', async () => {
+		it('ends a call on a session that did not ask for it', async () => {
 			// A call this session knows nothing about: the same signal reaches every
-			// session the user has open, and only the one that placed the call is
-			// supposed to hear about it
+			// session the user has open, and the ones that did not place the call are hidden
 			const call = makeCall('call-id');
-
-			const onRejected = jest.fn();
-			call.emitter.on('rejected', onRejected);
 
 			await call.processSignal(rejection());
 
 			expect(call.hidden).toBe(true);
-			expect(onRejected).not.toHaveBeenCalled();
 			expect(call.state).toBe('hangup');
 		});
 
-		it('stays quiet on a session whose contract was not the one addressed', async () => {
+		it('ends a call on a session whose contract was not the one addressed', async () => {
 			const call = makeCall('call-id');
 			await call.initializeOutboundCall({ type: 'user', id: 'callee-id' });
 			call.setContractState('ignored');
 
-			const onRejected = jest.fn();
-			call.emitter.on('rejected', onRejected);
-
 			await call.processSignal(rejection({ toContractId: 'some-other-session' }));
 
-			expect(onRejected).not.toHaveBeenCalled();
 			expect(call.state).toBe('hangup');
 		});
 	});

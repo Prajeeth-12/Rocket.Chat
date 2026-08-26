@@ -1,12 +1,6 @@
 import type { IMediaCall, IUser, MediaCallContact } from '@rocket.chat/core-typings';
 import type { Emitter } from '@rocket.chat/emitter';
-import type {
-	CallFeature,
-	CallRejectionMessage,
-	ClientMediaSignal,
-	ClientMediaSignalBody,
-	ServerMediaSignal,
-} from '@rocket.chat/media-signaling';
+import type { CallFeature, ClientMediaSignal, ClientMediaSignalBody, ServerMediaSignal } from '@rocket.chat/media-signaling';
 
 import type { InternalCallParams, SignalProcessingOptions } from './common';
 
@@ -42,8 +36,6 @@ export type PreCallCreatedHookResult =
 			prevented: true;
 			/** Recorded in the server logs, not shown to anyone. */
 			reason?: string;
-			/** Shown to whoever requested the call, when the hook has something to tell them. */
-			message?: CallRejectionMessage;
 	  }
 	| {
 			prevented: false;
