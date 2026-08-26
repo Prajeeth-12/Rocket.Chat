@@ -9,5 +9,5 @@ import type { MarkedEventResult } from '@rocket.chat/apps-engine/definition/even
  * `EventResult.*` factories and never has to recognize one.
  */
 export function isEventResult(value: unknown): value is MarkedEventResult {
-	return typeof value === 'object' && value !== null && (value as Record<string, unknown>)['@kind'] === EVENT_RESULT_KIND;
+	return typeof value === 'object' && value !== null && value['@kind'] === EVENT_RESULT_KIND;
 }

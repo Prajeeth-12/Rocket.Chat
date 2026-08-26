@@ -3,32 +3,21 @@
  */
 export const EVENT_RESULT_KIND = 'EventResult';
 
-interface IMarker {
-	'@kind': typeof EVENT_RESULT_KIND;
-}
+type Marker = { '@kind': typeof EVENT_RESULT_KIND };
 
 export type I18nMessage = {
 	key: string;
 	args?: { [key: string]: string | number };
 };
 
-/**
- * Author-facing, marker-free union — the type app authors annotate a handler's
- * return type against (directly, or via a per-event restricted alias).
- */
-export type EventResult<T = unknown> =
-	| { type: 'pass' }
-	| { type: 'patch'; patch: Partial<T> }
-	| ({ type: 'prevent' } & ({ reason: string } | { i18n: I18nMessage }));
-
 /** Branded variant returned by `EventResult.pass()`. */
-export type PassEventResult = IMarker & { type: 'pass' };
+export type PassEventResult = Marker & { type: 'pass' };
 
 /** Branded variant returned by `EventResult.patch()`. */
-export type PatchEventResult<T> = IMarker & { type: 'patch'; patch: Partial<T> };
+export type PatchEventResult<T> = Marker & { type: 'patch'; patch: Partial<T> };
 
 /** Branded variant returned by `EventResult.prevent()`. */
-export type PreventEventResult = IMarker & { type: 'prevent' } & ({ reason: string } | { i18n: I18nMessage });
+export type PreventEventResult = Marker & { type: 'prevent' } & ({ reason: string } | { i18n: I18nMessage });
 
 /**
  * The shape that actually crosses the JSON-RPC boundary and that
@@ -44,7 +33,6 @@ export type MarkedEventResult<T = unknown> = PassEventResult | PatchEventResult<
  * return type is a restricted union (e.g. `pass | patch`) fails to typecheck if
  * an author returns a disallowed variant (e.g. `prevent`).
  */
-// eslint-disable-next-line @typescript-eslint/no-redeclare -- the union type and the factory namespace share a name on purpose
 export const EventResult = {
 	pass(): PassEventResult {
 		return { '@kind': EVENT_RESULT_KIND, 'type': 'pass' };

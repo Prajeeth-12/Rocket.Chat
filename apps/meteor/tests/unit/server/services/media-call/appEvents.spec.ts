@@ -405,7 +405,7 @@ describe('media call app events', () => {
 
 		it('reports the reason an app prevented the call', async () => {
 			triggerEvent.resolves({
-				prevented: true,
+				type: 'prevent',
 				meta: { app: { id: 'blocking-app', name: 'Blocking App', i18nNamespace: 'app-blocking-app' } },
 				reason: 'callee is on a do-not-disturb list',
 			});
@@ -421,7 +421,7 @@ describe('media call app events', () => {
 
 		it('keeps the i18n key and its args, in the namespace the apps platform reported', async () => {
 			triggerEvent.resolves({
-				prevented: true,
+				type: 'prevent',
 				meta: { app: { id: 'blocking-app', name: 'Blocking App', i18nNamespace: 'app-blocking-app' } },
 				i18n: { key: 'callee_is_dnd', args: { username: 'callee' } },
 			});
@@ -433,10 +433,19 @@ describe('media call app events', () => {
 			});
 		});
 
+		it('keeps the requested features when every app passed', async () => {
+			triggerEvent.resolves({ type: 'pass' });
+
+			expect(await runPreMediaCallCreatedAppHook(hookParams({ features: ['audio', 'hold'] }))).to.deep.equal({
+				prevented: false,
+				features: ['audio', 'hold'],
+			});
+		});
+
 		it('returns the features an app patched in', async () => {
 			triggerEvent.resolves({
-				prevented: false,
-				context: { ...hookParams(), features: ['audio', 'hold'] },
+				type: 'patch',
+				patch: { ...hookParams(), features: ['audio', 'hold'] },
 			});
 
 			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({ prevented: false, features: ['audio', 'hold'] });
@@ -444,11 +453,21 @@ describe('media call app events', () => {
 
 		it('drops the features an app asked for that the workspace does not know about', async () => {
 			triggerEvent.resolves({
-				prevented: false,
-				context: { ...hookParams(), features: ['audio', 'teleportation', 'hold'] },
+				type: 'patch',
+				patch: { ...hookParams(), features: ['audio', 'teleportation', 'hold'] },
 			});
 
 			expect(await runPreMediaCallCreatedAppHook(hookParams())).to.deep.equal({ prevented: false, features: ['audio', 'hold'] });
+		});
+
+		it('keeps the requested features when a patch names none', async () => {
+			const { features, ...patch } = hookParams();
+			triggerEvent.resolves({ type: 'patch', patch });
+
+			expect(await runPreMediaCallCreatedAppHook(hookParams({ features: ['audio', 'hold'] }))).to.deep.equal({
+				prevented: false,
+				features: ['audio', 'hold'],
+			});
 		});
 	});
 });

@@ -3,10 +3,11 @@ import type {
 	IMediaCallParticipantJoinedContext,
 	IMediaCallStartedContext,
 	IPreMediaCallCreatedContext,
+	MediaCallCreateEventResult,
 } from '@rocket.chat/apps-engine/definition/mediaCalls';
 import type { AppMethod } from '@rocket.chat/apps-engine/definition/metadata';
 
-import type { PreventedEventResult } from '../eventResult';
+import type { HostEventResult } from '../eventResult';
 
 /**
  * Envelope used to dispatch a media-call event to the apps that implement
@@ -29,9 +30,4 @@ export type MediaCallEvent =
  * either the first app to `prevent` the call, or the context as patched by all of
  * them.
  */
-export type PreMediaCallCreatedOutcome =
-	| ({ prevented: true } & PreventedEventResult)
-	| {
-			prevented: false;
-			context: IPreMediaCallCreatedContext;
-	  };
+export type PreMediaCallCreatedOutcome = HostEventResult<MediaCallCreateEventResult>;

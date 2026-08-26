@@ -323,9 +323,9 @@ reporting `'webrtc'`, and it keeps meaning the transport.
 
 `origin` is added to `IPreMediaCallCreatedContext` and to the app-facing `IMediaCall`, so pre and
 post events agree. It is **not patchable**: `MediaCallCreatePatch` stays `Pick<..., 'features'>`, and
-`AppListenerManager.getMediaCallCreatePatch` (`:1371-1385`) drops anything that is not `features` —
-along with a patch that is not an object at all, since `isEventResult` checks the marker and not the
-payload under it.
+`getMediaCallCreatePatch` (`packages/apps/src/server/mediaCalls/`) drops anything that is not
+`features` — along with a patch that is not an object at all, since `isEventResult` checks the marker
+and not the payload under it.
 
 ### Where it is computed
 
@@ -696,6 +696,11 @@ outcomes are written as system messages via `saveCallToHistory` / `sendHistoryMe
 - Host-side envelopes: `packages/apps/src/server/mediaCalls/IMediaCallEvent.ts` — `MediaCallEvent`
   and `PreMediaCallCreatedOutcome`, re-exported from `@rocket.chat/apps`. Apps never see either, so
   neither belongs in the package an app imports. See ADR 0002's implementation record.
+  `PreMediaCallCreatedOutcome` is `HostEventResult<MediaCallCreateEventResult>`, so the host reads
+  back the same `pass` / `patch` / `prevent` vocabulary the app spoke, with `meta` naming the app on
+  a `prevent`. A `patch` outcome carries the **accumulated** context, not the last app's fragment;
+  `pass` carries nothing, because the host still holds the context it dispatched. The one union is
+  what stops the host and the engine from drifting apart when a variant is added.
 - Enums: `packages/apps-engine/src/definition/metadata/{AppInterface,AppMethod}.ts`.
 - Dispatch: `packages/apps/src/server/managers/AppListenerManager.ts`, covered by
   `packages/apps/tests/server/managers/AppListenerManager.mediaCalls.test.ts`. The post events are

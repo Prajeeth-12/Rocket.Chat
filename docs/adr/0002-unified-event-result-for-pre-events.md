@@ -2,11 +2,11 @@
 
 ## Status
 
-**Accepted — partially implemented.** The type and the `EventResult.*` factories landed in
-`packages/apps-engine/src/definition/eventResult/`, the host-side `isEventResult()` guard in
-`packages/apps/src/server/eventResult/`, and the media-call pre-create event is their first consumer
-(see [ADR 0003](./0003-media-call-events-for-apps.md)). Two parts of this decision are deliberately
-not in the code yet:
+**Accepted — partially implemented.** The branded variants and the `EventResult.*` factories landed
+in `packages/apps-engine/src/definition/eventResult/`, the host-side `isEventResult()` guard and
+`HostEventResult` in `packages/apps/src/server/eventResult/`, and the media-call pre-create event is
+their first consumer (see [ADR 0003](./0003-media-call-events-for-apps.md)). Two parts of this
+decision are deliberately not in the code yet:
 
 - **`prompt` has no type definitions.** No event permits it today, and no flow can suspend and
   resume to serve it. The variant is specified below and lands with the first event that needs it —
@@ -27,10 +27,11 @@ replaces the five inconsistent return contracts in use today (boolean, entity-ob
 `pass` / `patch` / `prevent` unify mechanisms that already exist across messages, rooms, uploads and
 email.
 
-The author-facing shape is a marker-free discriminated union:
+The variant vocabulary is a discriminated union on `type`:
 
 ```ts
-type EventResult<T> =
+// the variants, written without the marker each shipped one carries
+type EventResultVariants<T> =
   | { type: 'pass' }                                   // allow unchanged
   | { type: 'patch'; patch: Partial<T> }               // patch the subject (message/room/upload/…)
   | { type: 'prevent'; reason: string }                // literal, pre-formatted
@@ -53,6 +54,13 @@ app-translation-aware surface renderer (`useStringFromTextObject` → `useAppTra
 prompt's `title`/`text` can itself be an app i18n key resolved client-side at render time. The
 `i18n: { key, args? }` member on `prevent` and on the simple `prompt` is the explicit translation
 channel for the non-UIKit paths (a thrown `Meteor.Error`, a plain modal).
+
+**There is no marker-free `EventResult<T>` type in the code.** Every shipped variant carries the
+reserved marker — see [The discriminator](#the-discriminator--reserved-kind-eventresult) — and an
+author annotates against `MarkedEventResult<T>`, or against a per-event alias that restricts it. The
+marker still never appears in app source, because the factories stamp it. One union carrying the
+marker, rather than a marker-free twin of it, is what lets a host type be derived from the app-facing
+one instead of restated beside it.
 
 **`prompt` is specified here, not implemented.** `PromptEventResult`, its payload type and the
 `EventResult.prompt()` factory are absent from `packages/apps-engine`, and `MarkedEventResult` is
@@ -83,8 +91,8 @@ already treat an unknown variant as `pass`.
 4. **Reserved discriminator `'@kind': 'EventResult'`.** A single `isEventResult(x)` guard checks
    `@kind` and runs **before** any legacy `typeof === 'object'` / truthiness branch. Authors never
    write `@kind`; the factories stamp it.
-5. **`EventResult.*` companion-object factories.** `EventResult` is simultaneously the marker-free
-   union *type* and a *value* namespace of factory functions. Factories stamp the marker and return
+5. **`EventResult.*` factories.** `EventResult` is a *value* namespace of factory functions, and
+   nothing else: the name is not also a type. Factories stamp the marker and return
    **branded per-variant types**. Per-event narrowing comes from **each handler interface's
    restricted return-type alias** — not from a new accessor and not from a generic `IModify`.
 6. **`patch` merge is shallow** — one level of spread over the subject, as `Object.assign` does at the
@@ -186,8 +194,9 @@ value, or an app that sets a custom `type`, could collide and make `Object.assig
 The decision is a **reserved marker the entities never carry** — `'@kind': 'EventResult'` — checked
 by a single `isEventResult(x)` type guard used everywhere, running **before** any legacy branch. The
 `@` prefix keeps it out of the space of legitimate property names, so there is zero overlap with
-`IMessage` / `IRoom` / `IEmailDescriptor`. Internally the manager uses a `MarkedEventResult` type
-carrying `@kind`; the public `EventResult<T>` type authors annotate against omits it.
+`IMessage` / `IRoom` / `IEmailDescriptor`. `MarkedEventResult<T>` is the union carrying `@kind`, and
+it is the type both the manager and the app author work against; the factories are the only thing
+that writes the marker.
 
 ### Would an `EventResult` be misinterpreted if returned today? Yes
 
@@ -221,10 +230,9 @@ This mapping is what lets an app migrate `return true` → `EventResult.prevent(
 
 ### Authoring API — `EventResult.*` factories
 
-`EventResult` is a **companion object**: the same name is both the marker-free union *type* and a
-*value* namespace of factories. This gives one discoverable entry point, keeps the marker an
-implementation detail, and lets per-event restriction come from the **handler's return type** rather
-than a new accessor.
+`EventResult` is a *value* namespace of factories. This gives one discoverable entry point, keeps the
+marker an implementation detail, and lets per-event restriction come from the **handler's return
+type** rather than a new accessor.
 
 ```ts
 // value namespace stamps '@kind':'EventResult' and returns BRANDED per-variant
@@ -243,6 +251,8 @@ then enforce the subset:
 
 ```ts
 type MessageModifyEventResult  = PassEventResult | PatchEventResult<IMessage>;
+// an event that permits every variant names the whole union instead of listing it:
+// type MediaCallCreateEventResult = MarkedEventResult<MediaCallCreatePatch>;
 
 interface IPreMessageSentModify {
   executePreMessageSentModify(msg, builder, read, http, persis): Promise<MessageModifyEventResult>;
@@ -284,6 +294,29 @@ only via a bug or a tampered JSON-RPC payload — the manager **logs a warning a
 as `pass`** (fail-open). A disallowed variant is never a legitimate block (a well-formed `prevent`
 is allowed on every event in the matrix), and proceeding as `pass` degrades more gracefully than
 turning a malformed return into a user-facing outage on a hot path.
+
+### The host-side shape — `HostEventResult`
+
+The host reads back the vocabulary the app spoke. `HostEventResult<M>` is **derived** from the
+app-facing union `M`: it strips the marker, which has done its job once the guard recognized the
+result, and adds `meta` to the `prevent` variant alone.
+
+```ts
+type HostEventResult<M extends MarkedEventResult<any>, U = DistributiveOmit<M, '@kind'>> =
+  U extends { type: 'prevent' } ? U & { meta: EventResultMeta } : U;
+```
+
+Two things follow, and both are the point of deriving rather than restating:
+
+- **A new variant costs one edit.** Widening `MarkedEventResult` with `prompt` widens every host
+  outcome type with it. A hand-written host union would silently keep the old vocabulary.
+- **`meta` is where it is needed and nowhere else.** Only a `prevent` has to name the app: the host
+  puts that app's name and its translations in front of a user. A `pass` changed nothing, and a
+  `patch` carries the subject as every app left it, so neither attributes anything to one app.
+
+`EventResultMeta` is stamped by the engine from the `ProxiedApp`, never sent by an app. `meta` on the
+wire is overwritten, not merged: `isEventResult` recognizes the marker and nothing under it, so an
+app can send a `meta` of its own and it must not be believed.
 
 ## Per-variant feasibility
 
@@ -460,19 +493,24 @@ The guard, the host-stamped metadata and the outcome envelopes have no app-side 
 in `packages/apps` beside the manager that produces them. The dependency runs one way — `apps` →
 `apps-engine` — so the host side may name the app-facing types and never the reverse.
 
-- `packages/apps-engine/src/definition/eventResult/EventResult.ts` — the `pass | patch | prevent`
-  union, the branded per-variant types, `MarkedEventResult`, and the `EventResult.*` factories.
+- `packages/apps-engine/src/definition/eventResult/EventResult.ts` — the branded per-variant types,
+  the `pass | patch | prevent` union `MarkedEventResult`, and the `EventResult.*` factories.
   `prompt` is absent, as recorded in Status.
 - `packages/apps-engine/src/definition/eventResult/index.ts` — exports.
 - `packages/apps/src/server/eventResult/isEventResult.ts` — the `@kind` guard. Host-side: an app
   produces a marked result with the factories and never has to recognize one. It imports
   `EVENT_RESULT_KIND` from apps-engine, so the guard and the stamp share one constant.
-- `packages/apps/src/server/eventResult/EventResultMeta.ts` — `EventResultMeta`, what the engine
-  tells the host about the app that produced a result. Stamped by the manager, never sent by an app.
-  See [the prevented-call proposal](../proposals/media-call-prevented-call.md), D2.
+- `packages/apps/src/server/eventResult/HostEventResult.ts` — `HostEventResult`, derived from the
+  app-facing union, and `EventResultMeta`, what the engine tells the host about the app that produced
+  a result. `EventResultMeta` lives beside the type that uses it, because `prevent` is the only
+  variant that carries one. See [the prevented-call
+  proposal](../proposals/media-call-prevented-call.md), D2.
+- `packages/apps/src/server/eventResult/makeHostEventResult.ts` — the one place a marked result
+  becomes a host one: it drops `@kind` and stamps `meta`, reading the app's name, its i18n namespace
+  and its translations of the key the result named off the `ProxiedApp`.
 - First consumer: `packages/apps-engine/src/definition/mediaCalls/MediaCallEventResult.ts`
-  (`MediaCallCreateEventResult` = `pass | patch | prevent`), dispatched by
-  `packages/apps/src/server/managers/AppListenerManager.ts`.
+  (`MediaCallCreateEventResult` = `MarkedEventResult<MediaCallCreatePatch>`, every variant permitted),
+  dispatched by `packages/apps/src/server/managers/AppListenerManager.ts`.
 - The manager's outcome envelopes — `MediaCallEvent` and `PreMediaCallCreatedOutcome` — live beside
   it in `packages/apps/src/server/mediaCalls/IMediaCallEvent.ts` and are re-exported from
   `@rocket.chat/apps`. Apps never see them; only the manager and the host read them.

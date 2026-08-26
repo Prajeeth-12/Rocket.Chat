@@ -200,8 +200,8 @@ const MAX_REJECTION_TEXT_LENGTH = 200;
  * be shown. The apps platform reports the namespace the app's key resolves in, so
  * the message is passed on rather than assembled here.
  */
-function toRejectionMessage(outcome: PreMediaCallCreatedOutcome & { prevented: true }): CallRejectionMessage | undefined {
-	if (outcome.i18n) {
+function toRejectionMessage(outcome: Extract<PreMediaCallCreatedOutcome, { type: 'prevent' }>): CallRejectionMessage {
+	if ('i18n' in outcome) {
 		return {
 			type: 'i18n',
 			key: outcome.i18n.key,
@@ -210,11 +210,7 @@ function toRejectionMessage(outcome: PreMediaCallCreatedOutcome & { prevented: t
 		};
 	}
 
-	if (outcome.reason) {
-		return { type: 'text', text: outcome.reason.slice(0, MAX_REJECTION_TEXT_LENGTH) };
-	}
-
-	return undefined;
+	return { type: 'text', text: outcome.reason.slice(0, MAX_REJECTION_TEXT_LENGTH) };
 }
 
 /**
@@ -247,22 +243,25 @@ export async function runPreMediaCallCreatedAppHook(params: PreCallCreatedHookPa
 		return { prevented: false };
 	}
 
-	if (outcome.prevented) {
+	if (outcome.type === 'prevent') {
+		const reason = 'reason' in outcome ? outcome.reason : undefined;
+		const i18nKey = 'i18n' in outcome ? outcome.i18n.key : undefined;
+
 		logger.info({
 			msg: 'An app prevented a media call from being created',
 			appId: outcome.meta.app.id,
-			reason: outcome.reason || outcome.i18n?.key,
+			reason: reason || i18nKey,
 		});
 
 		return {
 			prevented: true,
-			reason: outcome.reason || outcome.i18n?.key,
+			reason: reason || i18nKey,
 			message: toRejectionMessage(outcome),
 		};
 	}
 
 	// Apps are free to ask for features that don't exist; only the known ones move on
-	const features = outcome.context.features.filter(isCallFeature);
+	const features = outcome.type === 'patch' && outcome.patch.features ? outcome.patch.features.filter(isCallFeature) : params.features;
 
 	return { prevented: false, features };
 }

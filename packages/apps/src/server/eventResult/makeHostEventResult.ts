@@ -1,8 +1,7 @@
 import type { MarkedEventResult } from '@rocket.chat/apps-engine/definition/eventResult';
 
 import type { ProxiedApp } from '../ProxiedApp';
-import type { EventResultMeta } from './EventResultMeta';
-import type { HostEventResult } from './HostEventResult';
+import type { EventResultMeta, HostEventResult } from './HostEventResult';
 import { getAppTranslationNamespace, getAppTranslationsForKey } from '../misc/appTranslations';
 
 /**
@@ -36,23 +35,11 @@ function makeEventResultMeta(app: ProxiedApp, i18nKey?: string): EventResultMeta
  * app returned: `isEventResult` only recognizes the marker, so an app can put anything -
  * including a `meta` - under it.
  */
-export function makeHostEventResult<T>(app: ProxiedApp, result: MarkedEventResult<T>): HostEventResult<T> {
-	if (result.type === 'prevent') {
-		const i18n = 'i18n' in result && result.i18n ? result.i18n : undefined;
+export function makeHostEventResult<T extends MarkedEventResult<any>>(app: ProxiedApp, result: T): HostEventResult<T> {
+	const { '@kind': _, ...rest } = result;
 
-		return {
-			type: 'prevent',
-			meta: makeEventResultMeta(app, i18n?.key),
-			...('reason' in result && { reason: result.reason }),
-			...(i18n && { i18n }),
-		};
-	}
-
-	if (result.type === 'patch') {
-		return { type: 'patch', patch: result.patch, meta: makeEventResultMeta(app) };
-	}
-
-	// `pass`, and any `type` an app sent that the types never got to check. The type travels
-	// as it arrived, so the caller can still report an unsupported one by name.
-	return { type: result.type, meta: makeEventResultMeta(app) };
+	return {
+		...rest,
+		meta: makeEventResultMeta(app, 'i18n' in result ? result.i18n.key : undefined),
+	} as HostEventResult<T>;
 }

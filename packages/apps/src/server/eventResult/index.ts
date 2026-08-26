@@ -1,4 +1,3 @@
-export type { EventResultMeta } from './EventResultMeta';
-export type { HostEventResult, PreventedEventResult } from './HostEventResult';
+export type { HostEventResult, EventResultMeta } from './HostEventResult';
 export { isEventResult } from './isEventResult';
 export { makeHostEventResult } from './makeHostEventResult';

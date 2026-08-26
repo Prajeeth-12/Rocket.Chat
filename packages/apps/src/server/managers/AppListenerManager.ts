@@ -1307,12 +1307,13 @@ export class AppListenerManager {
 	}
 
 	private async executePreMediaCallCreated(data: IPreMediaCallCreatedContext): Promise<PreMediaCallCreatedOutcome> {
-		let context = data;
+		let patchAccumulator = data;
+		let outcome: PreMediaCallCreatedOutcome = { type: 'pass' };
 
 		for (const appId of this.listeners.get(AppInterface.IMediaCallHandler)) {
 			const app = this.manager.getOneById(appId);
 
-			const result = await app.call(AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED, context).catch((error) => {
+			const result = await app.call(AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED, patchAccumulator).catch((error) => {
 				// Every method of IMediaCallHandler is optional: an app may implement the
 				// interface for the post events alone
 				if (error?.code === JSONRPC_METHOD_NOT_FOUND) {
@@ -1330,18 +1331,13 @@ export class AppListenerManager {
 				continue;
 			}
 
-			const hostResult = makeHostEventResult(app, result);
-
-			switch (hostResult.type) {
+			switch (result.type) {
 				case 'prevent':
-					return {
-						prevented: true,
-						meta: hostResult.meta,
-						...(hostResult.reason !== undefined && { reason: hostResult.reason }),
-						...(hostResult.i18n && { i18n: hostResult.i18n }),
-					};
+					return makeHostEventResult(app, result);
 				case 'patch':
-					context = { ...context, ...getMediaCallCreatePatch(appId, hostResult.patch) };
+					patchAccumulator = { ...patchAccumulator, ...getMediaCallCreatePatch(appId, result.patch) };
+
+					outcome = { type: 'patch', patch: patchAccumulator };
 					break;
 				case 'pass':
 					break;
@@ -1351,13 +1347,13 @@ export class AppListenerManager {
 					// is a JSON-RPC payload the types never got to check.
 					console.warn(
 						`App ${appId} returned an unsupported EventResult from ${AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED}: ${
-							(hostResult as MarkedEventResult).type
+							(result as MarkedEventResult).type
 						}`,
 					);
 			}
 		}
 
-		return { prevented: false, context };
+		return outcome;
 	}
 
 	private async executePostMediaCallEvent(

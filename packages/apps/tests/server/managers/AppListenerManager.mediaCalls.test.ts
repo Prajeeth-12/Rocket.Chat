@@ -98,18 +98,19 @@ async function capturingWarnings<T>(fn: () => Promise<T>): Promise<{ result: T; 
 
 describe('AppListenerManager media call events', () => {
 	describe('pre media call created', () => {
-		it('passes the context through untouched when every app passes', async () => {
+		it('reports a pass, carrying nothing of its own, when every app passes', async () => {
 			const outcome = await runPreCallCreated([
 				mockApp('passing', { [AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => EventResult.pass() }),
 			]);
 
-			assert.deepStrictEqual(outcome, { prevented: false, context });
+			// A pass changed nothing, so it names no patch and no app: the host already holds the context
+			assert.deepStrictEqual(outcome, { type: 'pass' });
 		});
 
 		it('skips apps that only implement the post events', async () => {
 			const outcome = await runPreCallCreated([mockApp('post-only', { [AppMethod.EXECUTE_POST_MEDIA_CALL_ENDED]: () => undefined })]);
 
-			assert.deepStrictEqual(outcome, { prevented: false, context });
+			assert.deepStrictEqual(outcome, { type: 'pass' });
 		});
 
 		it('reports the app that prevented the call and stops consulting the others', async () => {
@@ -130,7 +131,7 @@ describe('AppListenerManager media call events', () => {
 			]);
 
 			assert.deepStrictEqual(outcome, {
-				prevented: true,
+				type: 'prevent',
 				meta: { app: { id: 'preventing', name: 'preventing app', i18nNamespace: 'app-preventing' } },
 				reason: 'callee is on a do-not-disturb list',
 			});
@@ -145,7 +146,7 @@ describe('AppListenerManager media call events', () => {
 			]);
 
 			assert.deepStrictEqual(outcome, {
-				prevented: true,
+				type: 'prevent',
 				meta: { app: { id: 'preventing', name: 'preventing app', i18nNamespace: 'app-preventing' } },
 				i18n: { key: 'callee_is_dnd' },
 			});
@@ -169,7 +170,7 @@ describe('AppListenerManager media call events', () => {
 			]);
 
 			assert.deepStrictEqual(outcome, {
-				prevented: true,
+				type: 'prevent',
 				meta: {
 					app: {
 						id: 'preventing',
@@ -195,7 +196,7 @@ describe('AppListenerManager media call events', () => {
 			]);
 
 			assert.deepStrictEqual(outcome, {
-				prevented: true,
+				type: 'prevent',
 				meta: { app: { id: 'preventing', name: 'preventing app', i18nNamespace: 'app-preventing' } },
 				i18n: { key: 'callee_is_dnd' },
 			});
@@ -218,7 +219,7 @@ describe('AppListenerManager media call events', () => {
 			]);
 
 			assert.deepStrictEqual(outcome, {
-				prevented: true,
+				type: 'prevent',
 				meta: { app: { id: 'preventing', name: 'preventing app', i18nNamespace: 'app-preventing' } },
 				reason: 'callee is on a do-not-disturb list',
 			});
@@ -242,9 +243,10 @@ describe('AppListenerManager media call events', () => {
 			]);
 
 			assert.deepStrictEqual(seen, [['audio'], ['audio', 'hold']]);
+			// One patch stands for all of them: the accumulated context, not the last app's fragment
 			assert.deepStrictEqual(outcome, {
-				prevented: false,
-				context: { ...context, features: ['audio', 'hold', 'transfer'] },
+				type: 'patch',
+				patch: { ...context, features: ['audio', 'hold', 'transfer'] },
 			});
 		});
 
@@ -261,7 +263,7 @@ describe('AppListenerManager media call events', () => {
 				}),
 			]);
 
-			assert.deepStrictEqual(outcome, { prevented: false, context: { ...context, features: ['audio', 'hold'] } });
+			assert.deepStrictEqual(outcome, { type: 'patch', patch: { ...context, features: ['audio', 'hold'] } });
 		});
 
 		it('drops a patch whose features are not a list', async () => {
@@ -273,7 +275,8 @@ describe('AppListenerManager media call events', () => {
 				]),
 			);
 
-			assert.deepStrictEqual(outcome, { prevented: false, context });
+			// The app patched, so the outcome is a patch; nothing usable came with it, so the context is unchanged
+			assert.deepStrictEqual(outcome, { type: 'patch', patch: context });
 			assert.deepStrictEqual(warnings, []);
 		});
 
@@ -288,17 +291,17 @@ describe('AppListenerManager media call events', () => {
 				]),
 			);
 
-			assert.deepStrictEqual(outcome, { prevented: false, context });
+			assert.deepStrictEqual(outcome, { type: 'patch', patch: context });
 			assert.deepStrictEqual(warnings, ['App marker-only returned a media call patch that is not an object: undefined']);
 		});
 
 		it('ignores a return value that is not an EventResult', async () => {
 			const outcome = await runPreCallCreated([
 				// Predates the EventResult protocol, or is simply not speaking it
-				mockApp('legacy', { [AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => ({ prevented: true, reason: 'not an EventResult' }) }),
+				mockApp('legacy', { [AppMethod.EXECUTE_PRE_MEDIA_CALL_CREATED]: () => ({ type: 'prevent', reason: 'not an EventResult' }) }),
 			]);
 
-			assert.deepStrictEqual(outcome, { prevented: false, context });
+			assert.deepStrictEqual(outcome, { type: 'pass' });
 		});
 
 		/**
@@ -318,7 +321,7 @@ describe('AppListenerManager media call events', () => {
 				]),
 			);
 
-			assert.deepStrictEqual(outcome, { prevented: false, context });
+			assert.deepStrictEqual(outcome, { type: 'pass' });
 			assert.strictEqual(warnings.length, 1);
 			assert.match(warnings[0], /App prompting returned an unsupported EventResult from executePreMediaCallCreated: prompt/);
 		});
