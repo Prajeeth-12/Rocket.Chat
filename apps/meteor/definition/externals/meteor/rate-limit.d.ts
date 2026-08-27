@@ -22,6 +22,6 @@ declare module 'meteor/rate-limit' {
 
 		public increment(input: RateLimiterOptionsToCheck);
 
-		public addRule(rule: RateLimiterRule, numRequestsAllowed: number, intervalTime: number, callback?: () => void): void;
+		public addRule(rule: RateLimiterRule, numRequestsAllowed: number, intervalTime: number, callback?: () => void): string;
 	}
 }

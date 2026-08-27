@@ -131,18 +131,6 @@ interface IAPIDefaultFieldsToExclude {
 
 export type { RateLimiterOptions } from './definition';
 
-// The rate limiter injects 429 into routes that never declare it, and in test mode the router
-// rejects any status without a validator.
-const validateTooManyRequestsResponse = ajv.compile({
-	type: 'object',
-	properties: {
-		success: { type: 'boolean', enum: [false] },
-		error: { type: 'string' },
-	},
-	required: ['success', 'error'],
-	additionalProperties: false,
-});
-
 export const defaultRateLimiterOptions: RateLimiterOptions = {
 	numRequestsAllowed: settings.get<number>('API_Enable_Rate_Limiter_Limit_Calls_Default'),
 	intervalTimeInMS: settings.get<number>('API_Enable_Rate_Limiter_Limit_Time_Default'),
@@ -271,6 +259,7 @@ export class APIClass<TBasePath extends string = '', TOperations extends Record<
 		return (
 			(typeof rateLimiterOptions === 'object' || rateLimiterOptions === undefined) &&
 			Boolean(this.version) &&
+			!process.env.TEST_MODE &&
 			Boolean(defaultRateLimiterOptions.numRequestsAllowed && defaultRateLimiterOptions.intervalTimeInMS)
 		);
 	}
@@ -856,13 +845,6 @@ export class APIClass<TBasePath extends string = '', TOperations extends Record<
 			Object.keys(operations).forEach((method) => {
 				const _options = { ...options };
 				const { tags = ['Missing Documentation'] } = _options as Record<string, any>;
-
-				if (this.shouldAddRateLimitToRoute(options)) {
-					(_options as TypedOptions).response = {
-						...(_options as TypedOptions).response,
-						429: validateTooManyRequestsResponse,
-					};
-				}
 
 				if (typeof operations[method as keyof Operations<TPathPattern, TOptions>] === 'function') {
 					(operations as Record<string, any>)[method] = {
