@@ -186,16 +186,21 @@ test.describe('Apps > Media call events', () => {
 				expect(entryValue(preCreated, 'pre_created_features')).toContain('screen-share');
 			});
 
-			await test.step('neither side can share their screen', async () => {
-				await expect(user2.poHomeChannel.voiceCalls.widget.controls.shareScreen).not.toBeVisible();
-				await expect(user1.poHomeChannel.voiceCalls.widget.controls.shareScreen).not.toBeVisible();
-			});
+			await test.step('neither side is offered screen sharing', async () => {
+				// The caller is looking at the DM the call is in, and an ongoing call takes that room
+				// over: the room view registers itself and the widget stops rendering. So the caller's
+				// controls are the room section's, and the callee - who is not in the room - keeps the
+				// widget. Each side is read where its controls actually are.
+				const callerControls = user1.poHomeChannel.voiceCalls.roomSection.controls;
+				const calleeControls = user2.poHomeChannel.voiceCalls.widget.controls;
 
-			await test.step('the caller gets the widget rather than the screen-capable room view', async () => {
-				// The view router only routes a peer DM to the room section when the call supports
-				// screen-share, so the patch is observable in which view the caller lands on.
-				await expect(user1.poHomeChannel.voiceCalls.widget.content).toBeVisible();
-				await expect(user1.poHomeChannel.voiceCalls.roomSection.content).not.toBeVisible();
+				// The end-call button is read first on both sides: it is always offered, so its presence
+				// is what makes the absence of the screen-share button mean anything.
+				await expect(callerControls.hangup).toBeVisible();
+				await expect(callerControls.shareScreen).not.toBeVisible();
+
+				await expect(calleeControls.hangup).toBeVisible();
+				await expect(calleeControls.shareScreen).not.toBeVisible();
 			});
 
 			await test.step('the call the app saw kept the patched feature list', async () => {
@@ -210,7 +215,7 @@ test.describe('Apps > Media call events', () => {
 
 	test.describe.serial('post events', () => {
 		test('should notify the app when a call is answered and when media starts flowing', async ({ api }) => {
-			const [, user2] = sessions;
+			const [user1, user2] = sessions;
 
 			await setMode(api, 'pass');
 
@@ -226,6 +231,13 @@ test.describe('Apps > Media call events', () => {
 				expect(entryValue(joined, 'post_joined_accepted_at')).toBeTruthy();
 				expect(entryValue(joined, 'post_joined_call')).toBeTruthy();
 				expect(entryValue(joined, 'post_joined_participant_keys')?.split(',')).not.toContain('contractId');
+			});
+
+			await test.step('both sides are offered screen sharing when no app patched it out', async () => {
+				// The counterpart of the patched call above: with the feature left alone, the control is
+				// there, on the same two surfaces.
+				await expect(user1.poHomeChannel.voiceCalls.roomSection.controls.shareScreen).toBeVisible();
+				await expect(user2.poHomeChannel.voiceCalls.widget.controls.shareScreen).toBeVisible();
 			});
 
 			await test.step('executePostMediaCallStarted receives an active call', async () => {
