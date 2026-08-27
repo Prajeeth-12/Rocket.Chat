@@ -38,9 +38,11 @@ import type {
 	GenericRouteExecutionContext,
 	TooManyRequestsResult,
 	SuccessStatusCodes,
+	RateLimiterOptions,
 } from './definition';
 import { getUserInfo } from './lib/getUserInfo';
 import { parseJsonQuery } from './lib/parseJsonQuery';
+import { buildRateLimiterInput, buildRateLimiterRule } from './rateLimiterKey';
 import type { APIActionContext } from './router';
 import { RocketChatAPIRouter } from './router';
 import { isObject } from '../../lib/utils/isObject';
@@ -127,10 +129,19 @@ interface IAPIDefaultFieldsToExclude {
 	inviteToken: number;
 }
 
-export type RateLimiterOptions = {
-	numRequestsAllowed?: number;
-	intervalTimeInMS?: number;
-};
+export type { RateLimiterOptions } from './definition';
+
+// The rate limiter injects 429 into routes that never declare it, and in test mode the router
+// rejects any status without a validator.
+const validateTooManyRequestsResponse = ajv.compile({
+	type: 'object',
+	properties: {
+		success: { type: 'boolean', enum: [false] },
+		error: { type: 'string' },
+	},
+	required: ['success', 'error'],
+	additionalProperties: false,
+});
 
 export const defaultRateLimiterOptions: RateLimiterOptions = {
 	numRequestsAllowed: settings.get<number>('API_Enable_Rate_Limiter_Limit_Calls_Default'),
@@ -260,7 +271,6 @@ export class APIClass<TBasePath extends string = '', TOperations extends Record<
 		return (
 			(typeof rateLimiterOptions === 'object' || rateLimiterOptions === undefined) &&
 			Boolean(this.version) &&
-			!process.env.TEST_MODE &&
 			Boolean(defaultRateLimiterOptions.numRequestsAllowed && defaultRateLimiterOptions.intervalTimeInMS)
 		);
 	}
@@ -434,8 +444,10 @@ export class APIClass<TBasePath extends string = '', TOperations extends Record<
 			return;
 		}
 
-		rateLimiterDictionary[objectForRateLimitMatch.route].rateLimiter.increment(objectForRateLimitMatch);
-		const attemptResult = await rateLimiterDictionary[objectForRateLimitMatch.route].rateLimiter.check(objectForRateLimitMatch);
+		const input = buildRateLimiterInput({ ...objectForRateLimitMatch, userId });
+
+		rateLimiterDictionary[objectForRateLimitMatch.route].rateLimiter.increment(input);
+		const attemptResult = await rateLimiterDictionary[objectForRateLimitMatch.route].rateLimiter.check(input);
 		const timeToResetAttempsInSeconds = Math.ceil(attemptResult.timeToReset / 1000);
 		response.headers.set(
 			'X-RateLimit-Limit',
@@ -530,12 +542,8 @@ export class APIClass<TBasePath extends string = '', TOperations extends Record<
 					rateLimiter: new RateLimiter(),
 					options: rateLimiterOptions,
 				};
-				const rateLimitRule = {
-					IPAddr: (input: any) => input,
-					route,
-				};
 				rateLimiterDictionary[route].rateLimiter.addRule(
-					rateLimitRule,
+					buildRateLimiterRule(route, rateLimiterOptions.per),
 					rateLimiterOptions.numRequestsAllowed as number,
 					rateLimiterOptions.intervalTimeInMS as number,
 				);
@@ -848,6 +856,13 @@ export class APIClass<TBasePath extends string = '', TOperations extends Record<
 			Object.keys(operations).forEach((method) => {
 				const _options = { ...options };
 				const { tags = ['Missing Documentation'] } = _options as Record<string, any>;
+
+				if (this.shouldAddRateLimitToRoute(options)) {
+					(_options as TypedOptions).response = {
+						...(_options as TypedOptions).response,
+						429: validateTooManyRequestsResponse,
+					};
+				}
 
 				if (typeof operations[method as keyof Operations<TPathPattern, TOptions>] === 'function') {
 					(operations as Record<string, any>)[method] = {

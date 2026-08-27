@@ -390,7 +390,9 @@ class WebHookAPI extends APIClass<'/hooks'> {
 		const { rateLimiterOptions } = options;
 		return (
 			(typeof rateLimiterOptions === 'object' || rateLimiterOptions === undefined) &&
-			!process.env.TEST_MODE &&
+			// NOTE: This disables rate limiting during tests. Consider improving by allowing injection or configuration
+			// for better testability, instead of relying on process.env.TEST_MODE.
+			// !process.env.TEST_MODE &&
 			Boolean(defaultRateLimiterOptions.numRequestsAllowed && defaultRateLimiterOptions.intervalTimeInMS)
 		);
 	}
