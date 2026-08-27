@@ -1,7 +1,8 @@
-import type { Page } from '@playwright/test';
+import type { APIRequestContext, Page } from '@playwright/test';
+import type { IInternalMediaCallHistoryItem } from '@rocket.chat/core-typings';
 
 import { appMediaCallEventsTest } from '../../data/apps/app-packages';
-import { IS_EE } from '../config/constants';
+import { DEFAULT_USER_CREDENTIALS, IS_EE } from '../config/constants';
 import { createAuxContext } from '../fixtures/createAuxContext';
 import { Users } from '../fixtures/userStates';
 import { HomeChannel } from '../page-objects';
@@ -25,6 +26,66 @@ type Mode = 'pass' | 'prevent' | 'drop-screen-share';
 const entryValue = (log: { entries: { args: string[] }[] } | undefined, label: string): string | undefined =>
 	log?.entries.find((entry) => entry.args[0] === label)?.args[1];
 
+/** Which side of the call one user's history is being read from, and who the other party is. */
+type HistoryQuery = { direction: 'inbound' | 'outbound'; filter: string };
+
+/**
+ * The newest history item of one user, for calls with one other user.
+ *
+ * `call-history.list` answers for whoever calls it, so each side of a call needs its own request
+ * context: the admin context every other assertion here uses would report the admin's own history.
+ */
+const getNewestCallHistoryItem = async (
+	userApi: APIRequestContext,
+	query: HistoryQuery,
+): Promise<IInternalMediaCallHistoryItem | undefined> => {
+	const response = await userApi.get('/api/v1/call-history.list', { params: { ...query, count: 1 } });
+
+	await expect(response).toBeOK();
+
+	const { items } = await response.json();
+
+	return items[0];
+};
+
+/** A history item that has finished being recorded, and so names the message it posted. */
+type RecordedCallHistoryItem = IInternalMediaCallHistoryItem & { messageId: string };
+
+/**
+ * Waits for a user to have a history item they did not have before, and returns it.
+ *
+ * An item is only read once it names the message it posted: the message id is written in a second
+ * update right after the item itself, so an item without one has not finished being recorded.
+ */
+const waitForNewCallHistoryItem = async (
+	userApi: APIRequestContext,
+	query: HistoryQuery,
+	previousItemId?: string,
+): Promise<RecordedCallHistoryItem> => {
+	let found: RecordedCallHistoryItem | undefined;
+
+	await expect
+		.poll(
+			async () => {
+				const newest = await getNewestCallHistoryItem(userApi, query);
+
+				if (!newest || newest._id === previousItemId || !newest.messageId) {
+					return false;
+				}
+
+				found = newest as RecordedCallHistoryItem;
+				return true;
+			},
+			{
+				message: `Timed out waiting for a new ${query.direction} call history item carrying a message`,
+				timeout: 20_000,
+			},
+		)
+		.toBe(true);
+
+	return found as RecordedCallHistoryItem;
+};
+
 /**
  * Split into two serial groups on purpose: within a group the tests share one pair of calls'
  * worth of state and have to run in order, but a failure in one group must not skip the other.
@@ -35,6 +96,8 @@ test.describe('Apps > Media call events', () => {
 	let appId: string;
 	let sessions: { page: Page; poHomeChannel: HomeChannel }[];
 	let screenSharingWasEnabled: unknown;
+	/** One request context per user, for the endpoints that answer for the caller alone. */
+	let userApis: Record<'user1' | 'user2', APIRequestContext>;
 
 	/**
 	 * Tells the fixture app how to answer the next `executePreMediaCallCreated`.
@@ -75,6 +138,13 @@ test.describe('Apps > Media call events', () => {
 			api.post('/users.setStatus', { status: 'online', username: 'user1' }),
 			api.post('/users.setStatus', { status: 'online', username: 'user2' }),
 		]);
+
+		const [user1Api, user2Api] = await Promise.all([
+			api.login({ username: 'user1', password: DEFAULT_USER_CREDENTIALS.password }),
+			api.login({ username: 'user2', password: DEFAULT_USER_CREDENTIALS.password }),
+		]);
+
+		userApis = { user1: user1Api, user2: user2Api };
 	});
 
 	test.beforeAll(async ({ browser }) => {
@@ -123,6 +193,13 @@ test.describe('Apps > Media call events', () => {
 
 			await setMode(api, 'prevent');
 
+			// Read before the call is placed: this pair of users has a history of earlier runs, and the
+			// item this test is about is the one that was not there yet.
+			const [previousCallerItem, previousCalleeItem] = await Promise.all([
+				getNewestCallHistoryItem(userApis.user1, { direction: 'outbound', filter: 'user2' }),
+				getNewestCallHistoryItem(userApis.user2, { direction: 'inbound', filter: 'user1' }),
+			]);
+
 			await user1.poHomeChannel.navbar.openChat('user2');
 			await expect(user1.poHomeChannel.composer.inputMessage).toBeVisible();
 
@@ -166,6 +243,44 @@ test.describe('Apps > Media call events', () => {
 				// `contractId` is the per-session signing token; the host strips it on the way in.
 				expect(keys).not.toContain('contractId');
 				expect(keys).toContain('username');
+			});
+
+			// Nobody's device rang, but the attempt got as far as routing, so the workspace writes it
+			// down like any other call that ended.
+			const callerItem = await waitForNewCallHistoryItem(
+				userApis.user1,
+				{ direction: 'outbound', filter: 'user2' },
+				previousCallerItem?._id,
+			);
+			const calleeItem = await waitForNewCallHistoryItem(
+				userApis.user2,
+				{ direction: 'inbound', filter: 'user1' },
+				previousCalleeItem?._id,
+			);
+
+			await test.step('both users keep a record of the call that never happened', async () => {
+				// The two sides read the same attempt, from their own end of it
+				expect(calleeItem.callId).toBe(callerItem.callId);
+				expect(callerItem.contactUsername).toBe('user2');
+				expect(calleeItem.contactUsername).toBe('user1');
+
+				for (const item of [callerItem, calleeItem]) {
+					expect(item.external).toBe(false);
+					// The call was never accepted and never activated, so there is nothing to time
+					expect(item.duration).toBe(0);
+					// A prevented call carries no hangup reason and no `acceptedAt`, so it lands in the
+					// same state a call nobody picked up does. Nothing reads `preventedBy` yet, so this
+					// is all a user is told - see the message below.
+					expect(item.state).toBe('not-answered');
+				}
+			});
+
+			await test.step('the record posts a message into the DM', async () => {
+				// Read by the id the history item names, so it is the message that record posted and not
+				// one an earlier call left in this DM. It reads as a missed call, for the reason above.
+				const message = user1.poHomeChannel.content.messageById(callerItem.messageId);
+
+				await expect(message).toContainText('Voice call not answered');
 			});
 		});
 
