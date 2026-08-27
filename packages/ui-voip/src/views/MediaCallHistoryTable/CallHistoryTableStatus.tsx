@@ -18,6 +18,7 @@ const getCallStateText = (status: CallHistoryItemState, t: TFunction) => {
 			return t('Not_answered');
 		case 'failed':
 		case 'error':
+		case 'prevented': // Stage 4 gives this its own word ("Prevented") and its own filter.
 			return t('Failed');
 		case 'transferred':
 			return t('Transferred');
@@ -32,6 +33,7 @@ const getIcon = (status: CallHistoryItemState) => {
 			return 'phone-question-mark';
 		case 'failed':
 		case 'error':
+		case 'prevented':
 			return 'phone-issue';
 		case 'transferred':
 			return 'arrow-forward';
@@ -44,6 +46,7 @@ const getVariant = (status: CallHistoryItemState) => {
 			return 'status-font-on-warning';
 		case 'failed':
 		case 'error':
+		case 'prevented':
 			return 'status-font-on-danger';
 		default:
 			return 'secondary';

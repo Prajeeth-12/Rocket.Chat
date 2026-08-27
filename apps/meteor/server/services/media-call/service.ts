@@ -279,7 +279,11 @@ export class MediaCallService extends ServiceClassInternal implements IMediaCall
 			...this.getContactDataForInternalHistory(call.caller),
 		} as const;
 
-		await CallHistory.insertMany([outboundHistoryItem, inboundHistoryItem]).catch((err: unknown) =>
+		// A prevented call leaves an entry for the caller only. The callee's device never rang and
+		// they were never told, so nothing appears in their history (spec §3).
+		const historyItems = call.preventedBy ? [outboundHistoryItem] : [outboundHistoryItem, inboundHistoryItem];
+
+		await CallHistory.insertMany(historyItems).catch((err: unknown) =>
 			logger.error({ msg: 'Failed to insert items into Call History', err }),
 		);
 
@@ -333,6 +337,12 @@ export class MediaCallService extends ServiceClassInternal implements IMediaCall
 	}
 
 	private getCallHistoryItemState(call: IMediaCall): CallHistoryItemState {
+		// An app refused the call before it existed. This wins over every other state: the call never
+		// rang, so it can be neither transferred, answered nor failed.
+		if (call.preventedBy) {
+			return 'prevented';
+		}
+
 		if (call.transferredBy) {
 			return 'transferred';
 		}

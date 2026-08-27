@@ -27,7 +27,7 @@ export type CallHistoryData = {
 	direction: 'inbound' | 'outbound';
 	duration: number;
 	startedAt: Date;
-	state: 'ended' | 'not-answered' | 'failed' | 'error' | 'transferred';
+	state: 'ended' | 'not-answered' | 'failed' | 'error' | 'transferred' | 'prevented';
 	messageId?: string;
 };
 

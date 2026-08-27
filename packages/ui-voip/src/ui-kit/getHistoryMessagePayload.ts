@@ -12,6 +12,7 @@ export const callStateToTranslationKey = (callState: CallHistoryItemState): Text
 			return { type: 'mrkdwn', i18n: { key: 'Call_not_answered_bold' }, text: 'Call not answered' };
 		case 'failed':
 		case 'error':
+		case 'prevented': // Stage 4 replaces this with the dedicated prevented card (title "Voice call not placed").
 			return { type: 'mrkdwn', i18n: { key: 'Call_failed_bold' }, text: 'Call failed' };
 		case 'transferred':
 			return { type: 'mrkdwn', i18n: { key: 'Call_transferred_bold' }, text: 'Call transferred' };
@@ -26,6 +27,7 @@ export const callStateToIcon = (callState: CallHistoryItemState): FrameableIconE
 			return { type: 'icon', icon: 'phone-question-mark', variant: 'warning', framed: true };
 		case 'failed':
 		case 'error':
+		case 'prevented': // A prevented call uses the failed-call icon; the status word carries the distinction.
 			return { type: 'icon', icon: 'phone-issue', variant: 'danger', framed: true };
 		case 'transferred':
 			return { type: 'icon', icon: 'arrow-forward', variant: 'secondary', framed: true };
