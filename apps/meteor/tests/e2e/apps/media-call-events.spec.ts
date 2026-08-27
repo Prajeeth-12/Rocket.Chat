@@ -1,8 +1,10 @@
 import type { APIRequestContext, Page } from '@playwright/test';
-import type { IInternalMediaCallHistoryItem } from '@rocket.chat/core-typings';
+import type { CallPreventionRecord, IInternalMediaCallHistoryItem, IMediaCall } from '@rocket.chat/core-typings';
+import type { Filter } from 'mongodb';
+import { MongoClient } from 'mongodb';
 
 import { appMediaCallEventsTest } from '../../data/apps/app-packages';
-import { DEFAULT_USER_CREDENTIALS, IS_EE } from '../config/constants';
+import { DEFAULT_USER_CREDENTIALS, IS_EE, URL_MONGODB } from '../config/constants';
 import { createAuxContext } from '../fixtures/createAuxContext';
 import { Users } from '../fixtures/userStates';
 import { HomeChannel } from '../page-objects';
@@ -20,7 +22,14 @@ import type { BaseTest } from '../utils/test';
 import { expect, test } from '../utils/test';
 
 /** Matches the modes the fixture app understands - see tests/data/apps/app-packages/README.md. */
-type Mode = 'pass' | 'prevent' | 'drop-screen-share';
+type Mode = 'pass' | 'prevent' | 'prevent-i18n' | 'drop-screen-share';
+
+/** What the fixture app ships for the key it names in `prevent-i18n` mode, per its `i18n/en.json`. */
+const APP_PREVENTION_KEY = 'call_prevented_for_callee';
+const APP_PREVENTION_WORDING = 'Calls to user2 are not allowed by this workspace';
+
+/** The prevention record of an app that named a key rather than writing the words itself. */
+type I18nPreventionRecord = Extract<CallPreventionRecord, { key: string }>;
 
 /** `entries[].args[1]` for a label, within a single already-located log group. */
 const entryValue = (log: { entries: { args: string[] }[] } | undefined, label: string): string | undefined =>
@@ -87,6 +96,42 @@ const waitForNewCallHistoryItem = async (
 };
 
 /**
+ * A call an app refused, read from the database.
+ *
+ * Nothing reads `preventedBy` yet - no endpoint reports it and no view renders it - so the
+ * collection is the only place the record can be observed from. Scoped to the fixture app, so a
+ * record another app or another spec left behind is never mistaken for this one.
+ */
+const getNewestPreventedCall = async (connection: MongoClient, appId: string): Promise<IMediaCall | null> =>
+	connection
+		.db()
+		.collection<IMediaCall>('rocketchat_media_calls')
+		.findOne({ 'preventedBy.appId': appId } as Filter<IMediaCall>, { sort: { createdAt: -1 } });
+
+/** Waits for the app to refuse a call it had not refused before, and returns the record of it. */
+const waitForNewPreventedCall = async (connection: MongoClient, appId: string, previousCallId?: string): Promise<IMediaCall> => {
+	let found: IMediaCall | undefined;
+
+	await expect
+		.poll(
+			async () => {
+				const newest = await getNewestPreventedCall(connection, appId);
+
+				if (!newest || newest._id === previousCallId) {
+					return false;
+				}
+
+				found = newest;
+				return true;
+			},
+			{ message: 'Timed out waiting for the app to refuse a call', timeout: 20_000 },
+		)
+		.toBe(true);
+
+	return found as IMediaCall;
+};
+
+/**
  * Split into two serial groups on purpose: within a group the tests share one pair of calls'
  * worth of state and have to run in order, but a failure in one group must not skip the other.
  */
@@ -98,6 +143,7 @@ test.describe('Apps > Media call events', () => {
 	let screenSharingWasEnabled: unknown;
 	/** One request context per user, for the endpoints that answer for the caller alone. */
 	let userApis: Record<'user1' | 'user2', APIRequestContext>;
+	let connection: MongoClient;
 
 	/**
 	 * Tells the fixture app how to answer the next `executePreMediaCallCreated`.
@@ -125,6 +171,8 @@ test.describe('Apps > Media call events', () => {
 	};
 
 	test.beforeAll(async ({ api }) => {
+		connection = await MongoClient.connect(URL_MONGODB);
+
 		// Set rather than assumed: `screen-share` only reaches the app's feature list while this is
 		// on, and other specs turn it off for the length of their own run. The value it had is put
 		// back in `afterAll`, so this spec leaves the workspace as it found it.
@@ -185,6 +233,7 @@ test.describe('Apps > Media call events', () => {
 		await Promise.all(sessions.map(({ page }) => page.close()));
 		await uninstallApp(appId);
 		await setSettingValueById(api, 'VoIP_TeamCollab_Screen_Sharing_Enabled', screenSharingWasEnabled);
+		await connection.close();
 	});
 
 	test.describe.serial('pre-create decisions', () => {
@@ -281,6 +330,50 @@ test.describe('Apps > Media call events', () => {
 				const message = user1.poHomeChannel.content.messageById(callerItem.messageId);
 
 				await expect(message).toContainText('Voice call not answered');
+			});
+		});
+
+		test('should keep the app wording of a call it prevented with an i18n key', async ({ api }) => {
+			const [user1, user2] = sessions;
+
+			await setMode(api, 'prevent-i18n');
+
+			const previousPreventedCall = await getNewestPreventedCall(connection, appId);
+
+			await user1.poHomeChannel.navbar.openChat('user2');
+			await expect(user1.poHomeChannel.composer.inputMessage).toBeVisible();
+
+			await user1.poHomeChannel.content.btnVoiceCall.click();
+			await expect(user1.poHomeChannel.voiceCalls.widget.content).toBeVisible();
+			await user1.poHomeChannel.voiceCalls.widget.controls.call.click();
+
+			await test.step('the call never starts and the callee is never rung', async () => {
+				await expect(user1.poHomeChannel.voiceCalls.widget.controls.cancel).not.toBeVisible();
+				await expect(user1.poHomeChannel.voiceCalls.widget.controls.call).toBeVisible();
+				await expect(user2.poHomeChannel.voiceCalls.widget.content).not.toBeVisible();
+			});
+
+			const call = await waitForNewPreventedCall(connection, appId, previousPreventedCall?._id);
+			const preventedBy = call.preventedBy as I18nPreventionRecord | undefined;
+
+			await test.step('the record names the key and where it resolves', () => {
+				expect(preventedBy, 'the prevented call carries no record of what refused it').toBeTruthy();
+				expect(preventedBy && 'key' in preventedBy, 'the record kept words instead of the key the app named').toBe(true);
+
+				expect(preventedBy?.appId).toBe(appId);
+				expect(preventedBy?.appName).toBe('media call events test');
+				expect(preventedBy?.key).toBe(APP_PREVENTION_KEY);
+				// Derivable from the app id today, stored anyway so the record still reads if that
+				// convention ever changes
+				expect(preventedBy?.ns).toBe(`app-${appId}`);
+				expect(preventedBy?.args).toEqual({ callee: 'user2' });
+			});
+
+			await test.step('the app wording is snapshotted with its arguments applied', () => {
+				// The app's own `i18n/en.json` wording, which only the app knows, interpolated and
+				// stored: it is the whole of what a reader gets once the app is uninstalled and takes
+				// its namespace with it. A raw key here would be a snapshot that failed to resolve.
+				expect(preventedBy?.fallbackText).toBe(APP_PREVENTION_WORDING);
 			});
 		});
 

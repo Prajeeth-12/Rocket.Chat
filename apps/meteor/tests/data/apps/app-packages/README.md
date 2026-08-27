@@ -705,7 +705,7 @@ answers the pre-create event according to a mode the test sets beforehand.
 
 **Mode endpoint:**
 
-- `POST /api/apps/public/:appId/mode` with `{ "mode": "pass" | "prevent" | "drop-screen-share" }`
+- `POST /api/apps/public/:appId/mode` with `{ "mode": "pass" | "prevent" | "prevent-i18n" | "drop-screen-share" }`
 - `GET /api/apps/public/:appId/mode` returns the current mode (defaults to `pass`)
 
 The mode drives `executePreMediaCallCreated`:
@@ -714,7 +714,13 @@ The mode drives `executePreMediaCallCreated`:
 | --- | --- |
 | `pass` | `EventResult.pass()` |
 | `prevent` | `EventResult.prevent({ reason: 'blocked by media-call-events-test' })` |
+| `prevent-i18n` | `EventResult.prevent({ i18n: { key, args } })`, naming `call_prevented_for_callee` with the callee's username |
 | `drop-screen-share` | `EventResult.patch({ features })` with `screen-share` removed |
+
+`prevent-i18n` is why this package ships an `i18n/en.json`. An app that refuses a call by naming a key
+says nothing readable on its own, so the host reads the app's own wording for that key and stores a copy of
+it on the call - the only copy left once the app is uninstalled. The wording interpolates `{{callee}}`, so
+the stored copy proves the arguments were applied and not stored unexpanded.
 
 Driving the outcome from a mode rather than from the callee's username matters: a call that fails because the
 callee was unreachable looks identical in the UI to one an app blocked, so the tests need to run the *same*
@@ -776,9 +782,16 @@ import { AppMethod, RocketChatAssociationModel, RocketChatAssociationRecord } fr
  * over the `mode` endpoint before driving a call, so a single user pair can be run
  * through every outcome instead of encoding the outcome in the callee's username.
  */
-type Mode = 'pass' | 'prevent' | 'drop-screen-share';
+type Mode = 'pass' | 'prevent' | 'prevent-i18n' | 'drop-screen-share';
 
-const MODES: Mode[] = ['pass', 'prevent', 'drop-screen-share'];
+const MODES: Mode[] = ['pass', 'prevent', 'prevent-i18n', 'drop-screen-share'];
+
+/**
+ * The key the app names in `prevent-i18n` mode. The app ships its own wording for it in
+ * `i18n/en.json`, and nothing on the server side knows that wording: the host has to read it
+ * off the app to store a copy that survives the app's uninstall.
+ */
+const PREVENTION_I18N_KEY = 'call_prevented_for_callee';
 
 const association = new RocketChatAssociationRecord(RocketChatAssociationModel.MISC, 'media-call-events-test-mode');
 
@@ -809,6 +822,12 @@ export class MediaCallEventsTestApp extends App implements IMediaCallHandler {
 
 		if (mode === 'prevent') {
 			return EventResult.prevent({ reason: 'blocked by media-call-events-test' });
+		}
+
+		// The same refusal, said the other way: the app names a key it ships instead of words, so
+		// the reason reads in each reader's own language for as long as the app is installed.
+		if (mode === 'prevent-i18n') {
+			return EventResult.prevent({ i18n: { key: PREVENTION_I18N_KEY, args: { callee: context.callee.username ?? '' } } });
 		}
 
 		if (mode === 'drop-screen-share') {
@@ -856,7 +875,7 @@ export class MediaCallEventsTestApp extends App implements IMediaCallHandler {
 			visibility: ApiVisibility.PUBLIC,
 			security: ApiSecurity.UNSECURE,
 			endpoints: [
-				/** `POST /api/apps/public/:appId/mode` with `{ "mode": "pass" | "prevent" | "drop-screen-share" }`. */
+				/** `POST /api/apps/public/:appId/mode` with `{ "mode": Mode }` - see `MODES`. */
 				new (class extends ApiEndpoint {
 					public override path = 'mode';
 
