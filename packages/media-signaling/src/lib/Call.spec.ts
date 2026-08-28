@@ -77,5 +77,23 @@ describe('ClientMediaCall', () => {
 
 			expect(call.state).toBe('hangup');
 		});
+
+		it('flags the call as prevented when an app refused it', async () => {
+			const call = makeCall('call-id');
+			await call.initializeOutboundCall({ type: 'user', id: 'callee-id' });
+
+			await call.processSignal(rejection({ reason: 'prevented' }));
+
+			expect(call.prevented).toBe(true);
+		});
+
+		it('does not flag the call as prevented for any other rejection reason', async () => {
+			const call = makeCall('call-id');
+			await call.initializeOutboundCall({ type: 'user', id: 'callee-id' });
+
+			await call.processSignal(rejection({ reason: 'forbidden' }));
+
+			expect(call.prevented).toBe(false);
+		});
 	});
 });

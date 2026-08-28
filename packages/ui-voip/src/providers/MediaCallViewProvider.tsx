@@ -66,12 +66,19 @@ const MediaCallViewProvider = ({ children }: MediaCallViewProviderProps) => {
 				if (!instance) {
 					return;
 				}
-				return instance.on('endedCall', () => {
+				const offEnded = instance.on('endedCall', () => {
 					if (sessionState.hidden) {
 						return;
 					}
 					callback();
 				});
+				// A prevented call is refused before it is confirmed, so it never raises `endedCall`.
+				// It only ever fires in the session that placed the call, so it needs no hidden guard.
+				const offPrevented = instance.on('preventedCall', () => callback());
+				return () => {
+					offEnded?.();
+					offPrevented?.();
+				};
 			},
 			[instance, sessionState.hidden],
 		),

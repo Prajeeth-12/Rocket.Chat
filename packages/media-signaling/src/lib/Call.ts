@@ -85,6 +85,13 @@ export class ClientMediaCall implements IClientMediaCall {
 		return this._ignored;
 	}
 
+	private _prevented: boolean;
+
+	/** True when the server refused this call because an installed app prevented it. */
+	public get prevented(): boolean {
+		return this._prevented;
+	}
+
 	private _contact: CallContact | null;
 
 	public get contact(): CallContact {
@@ -319,6 +326,7 @@ export class ClientMediaCall implements IClientMediaCall {
 		this._state = 'none';
 		this.oldClientState = 'none';
 		this._ignored = false;
+		this._prevented = false;
 		this._contact = null;
 		this._transferredBy = null;
 		this._service = null;
@@ -635,6 +643,9 @@ export class ClientMediaCall implements IClientMediaCall {
 		}
 
 		if (signalType === 'rejected-call-request') {
+			// Remembered before the call ends so the session can play the caller the end-of-call
+			// tone: a prevented call is refused before it is confirmed, so it never raises `endedCall`.
+			this._prevented = signal.reason === 'prevented';
 			return this.flagAsEnded('remote');
 		}
 

@@ -255,6 +255,24 @@ test.describe('Apps > Media call events', () => {
 			await user1.poHomeChannel.content.btnVoiceCall.click();
 			await expect(user1.poHomeChannel.voiceCalls.widget.content).toBeVisible();
 
+			// The end-of-call tone is played through a detached `new Audio()`, which never enters the
+			// DOM and so cannot be located - so the caller's page records every sound that is played,
+			// by its id. Installed before the call is placed, cleared each run.
+			await user1.page.evaluate(() => {
+				const w = window as unknown as { __playedSounds?: string[]; __soundSpyInstalled?: boolean };
+				w.__playedSounds = [];
+				if (w.__soundSpyInstalled) {
+					return;
+				}
+				w.__soundSpyInstalled = true;
+
+				const { play } = window.HTMLMediaElement.prototype;
+				window.HTMLMediaElement.prototype.play = function (this: HTMLMediaElement) {
+					(w.__playedSounds ??= []).push(this.id);
+					return play.apply(this);
+				};
+			});
+
 			// Deliberately not `widget.initiateCall()`: that helper asserts the call starts ringing,
 			// which is exactly what must not happen here.
 			await user1.poHomeChannel.voiceCalls.widget.controls.call.click();
@@ -269,6 +287,17 @@ test.describe('Apps > Media call events', () => {
 
 			await test.step('the callee is told nothing', async () => {
 				await expect(user2.poHomeChannel.toastMessage.toast('error')).not.toBeVisible();
+			});
+
+			await test.step('the caller hears the end-of-call tone', async () => {
+				// The one cue the prevented caller gets: the same tone every ended call plays. `call-ended`
+				// is the id `CustomSoundProvider` gives that sound; a toast is forbidden, so this is it.
+				await expect
+					.poll(() => user1.page.evaluate(() => (window as unknown as { __playedSounds?: string[] }).__playedSounds ?? []), {
+						message: 'the caller never heard the end-of-call tone after the call was prevented',
+						timeout: 10_000,
+					})
+					.toContain('call-ended');
 			});
 
 			await test.step('the app ran and saw the call it blocked', async () => {

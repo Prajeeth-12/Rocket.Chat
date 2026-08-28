@@ -329,7 +329,7 @@ class MediaCallDirector {
 				preventedBy: hookResult.preventedBy,
 			}).catch((err) => logger.error({ msg: 'Failed to record a prevented call', err, callerType: caller.type, calleeType: callee.type }));
 
-			throw new CallRejectedError('forbidden', hookResult.reason);
+			throw new CallRejectedError('prevented', hookResult.reason);
 		}
 
 		const requestedFeatures = getFeaturesSupportedByTransport(caller, callee, hookResult.features || features);

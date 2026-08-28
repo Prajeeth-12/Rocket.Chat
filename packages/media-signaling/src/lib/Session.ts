@@ -23,6 +23,8 @@ export type MediaSignalingEvents = {
 	newCall: { call: IClientMediaCall };
 	acceptedCall: { call: IClientMediaCall };
 	endedCall: void;
+	/** A call the caller placed was refused by an app before it was ever confirmed. */
+	preventedCall: void;
 	hiddenCall: void;
 	registered: { activeCalls: IClientMediaCall['callId'][] };
 	outOfSync: { missingCalls: IClientMediaCall['callId'][] };
@@ -728,6 +730,11 @@ export class MediaSignalingSession extends Emitter<MediaSignalingEvents> {
 
 	private onEndedCall(call: ClientMediaCall): void {
 		this.config.logger?.debug('MediaSignalingSession.onEndedCall');
+		// A prevented call is refused before it is confirmed, so `onSessionStateChange` never reports
+		// it ending. Surface it on its own event so the caller still gets the end-of-call tone.
+		if (call.prevented) {
+			this.emit('preventedCall');
+		}
 		this.ignoreCall(call.callId);
 		this.onSessionStateChange();
 	}
