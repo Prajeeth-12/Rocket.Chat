@@ -37,9 +37,10 @@ type MediaCallState = 'none' | 'ringing' | 'accepted' | 'active' | 'hangup';
  * wrote them, so this is one type: the two members are told apart by `'key' in record`.
  *
  * `appName` is the app's name as of the moment it acted; an uninstalled app cannot be asked
- * for it. A record that carries the words carries them in `text`. One that names a key
- * carries `fallbackText` instead: the app's own wording in the workspace's default language,
- * captured while the app was still installed. Either way it is capped at 200 characters.
+ * for it. Either member carries the words in `text`. A record that names no key carries only
+ * `text`. One that names a key carries `text` too: the app's own wording in the workspace's
+ * default language, captured while the app was still installed, read as a fallback once the app
+ * is gone. Either way it is capped at 200 characters.
  *
  * `ns` is always `app-<appId>` today and so derivable from the field beside it. It is stored
  * anyway because this record has to still read years after the app is gone: a stored
@@ -47,7 +48,7 @@ type MediaCallState = 'none' | 'ringing' | 'accepted' | 'active' | 'hangup';
  */
 export type CallPreventionRecord = { appId: string; appName: string } & (
 	| { text: string }
-	| { key: string; ns: string; args?: Record<string, string | number>; fallbackText: string }
+	| { text: string; key: string; ns: string; args?: Record<string, string | number> }
 );
 
 export interface IMediaCall extends IRocketChatRecord {

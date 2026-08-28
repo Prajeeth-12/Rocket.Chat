@@ -373,7 +373,7 @@ test.describe('Apps > Media call events', () => {
 				// The app's own `i18n/en.json` wording, which only the app knows, interpolated and
 				// stored: it is the whole of what a reader gets once the app is uninstalled and takes
 				// its namespace with it. A raw key here would be a snapshot that failed to resolve.
-				expect(preventedBy?.fallbackText).toBe(APP_PREVENTION_WORDING);
+				expect(preventedBy?.text).toBe(APP_PREVENTION_WORDING);
 			});
 		});
 

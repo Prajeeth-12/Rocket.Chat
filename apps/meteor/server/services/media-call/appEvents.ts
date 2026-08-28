@@ -263,7 +263,7 @@ function toPreventionRecord(outcome: Extract<PreMediaCallCreatedOutcome, { type:
 			key,
 			ns: app.i18nNamespace,
 			...(args && { args }),
-			fallbackText: resolveFallbackText(app, key, args),
+			text: resolveFallbackText(app, key, args),
 		};
 	}
 

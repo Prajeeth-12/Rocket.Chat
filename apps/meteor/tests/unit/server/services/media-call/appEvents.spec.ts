@@ -470,7 +470,7 @@ describe('media call app events', () => {
 					key: 'callee_is_dnd',
 					ns: 'app-blocking-app',
 					args: { username: 'callee' },
-					fallbackText: 'callee does not take calls',
+					text: 'callee does not take calls',
 				},
 			});
 		});
@@ -492,7 +492,7 @@ describe('media call app events', () => {
 
 			const result = await runPreMediaCallCreatedAppHook(hookParams());
 
-			expect(result.preventedBy.fallbackText).to.equal('sem chamadas');
+			expect(result.preventedBy.text).to.equal('sem chamadas');
 			settingsMock.get.returns('en');
 		});
 
@@ -506,7 +506,7 @@ describe('media call app events', () => {
 			const result = await runPreMediaCallCreatedAppHook(hookParams());
 
 			// A raw key must never be what a reader is left with
-			expect(result.preventedBy.fallbackText).to.equal('Prevented by Blocking App');
+			expect(result.preventedBy.text).to.equal('Prevented by Blocking App');
 			expect(loggerMock.warn.callCount).to.equal(1);
 		});
 
