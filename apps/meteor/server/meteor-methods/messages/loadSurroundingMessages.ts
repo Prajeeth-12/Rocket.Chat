@@ -6,6 +6,7 @@ import { Meteor } from 'meteor/meteor';
 import type { FindOptions } from 'mongodb';
 
 import { canAccessRoomIdAsync } from '../../lib/authorization/canAccessRoom';
+import { methodDeprecationLogger } from '../../lib/deprecationWarningLogger';
 import { normalizeMessagesForUser } from '../../lib/utils/lib/normalizeMessagesForUser';
 
 declare module '@rocket.chat/ddp-client' {
@@ -27,6 +28,7 @@ declare module '@rocket.chat/ddp-client' {
 
 Meteor.methods<ServerMethods>({
 	async loadSurroundingMessages(message, limit = 50, showThreadMessages = true) {
+		methodDeprecationLogger.method('loadSurroundingMessages', '9.0.0', '/v1/rooms.history');
 		check(message, Object);
 		check(limit, Number);
 		check(showThreadMessages, Boolean);
