@@ -3,12 +3,13 @@ import { Emitter } from '@rocket.chat/emitter';
 import { differenceInMilliseconds } from 'date-fns';
 import { useCallback, useSyncExternalStore } from 'react';
 
-import { getUserPreference } from '../../app/utils/client';
+import { dispatchToastMessage } from './toast';
 import { Messages, Subscriptions } from '../stores';
 import { onClientMessageReceived } from './onClientMessageReceived';
 import { getUserId } from './user';
 import { getConfig } from './utils/getConfig';
 import { mapMessageFromApi } from './utils/mapMessageFromApi';
+import { getUserPreference } from '../../app/utils/client';
 import { sdk } from '../../app/utils/client/lib/SDKClient';
 
 const processMessage = async (msg: IMessage & { ignored?: boolean }, { subscription }: { subscription?: ISubscription }) => {
@@ -333,38 +334,46 @@ class RoomHistoryManagerClass extends Emitter {
 
 		const subscription = Subscriptions.state.find((record) => record.rid === message.rid);
 
-		const result = await sdk.rest.get('/v1/rooms.history', {
-			roomId: message.rid,
-			aroundId: message._id,
-			count: defaultLimit,
-			showThreadMessages,
-		});
+		try {
+			const result = await sdk.rest.get('/v1/rooms.history', {
+				roomId: message.rid,
+				aroundId: message._id,
+				count: defaultLimit,
+				showThreadMessages,
+			});
 
-		// Rebuilds the window around the target, so the store does not grow monotonically here.
-		this.clear(message.rid);
+			// Rebuilds the window around the target, so the store does not grow monotonically here.
+			this.clear(message.rid);
 
-		// `clear` drops the cursors and clears `isLoading`, so restore both before the upsert yields:
-		// a `getMore` landing in that window has no cursor and would page from the newest end instead.
-		this.updateRoom(message.rid, {
-			isLoading: true,
-			cursorPrevious: result.cursor.previous,
-			cursorNext: result.cursor.next,
-			hasMore: result.cursor.previous !== null,
-			hasMoreNext: result.cursor.next !== null,
-		});
+			// `clear` drops the cursors and clears `isLoading`, so restore both before the upsert yields:
+			// a `getMore` landing in that window has no cursor and would page from the newest end instead.
+			this.updateRoom(message.rid, {
+				isLoading: true,
+				cursorPrevious: result.cursor.previous,
+				cursorNext: result.cursor.next,
+				hasMore: result.cursor.previous !== null,
+				hasMoreNext: result.cursor.next !== null,
+			});
 
-		const messages = result.messages.map((msg) => mapMessageFromApi(msg));
+			const messages = result.messages.map((msg) => mapMessageFromApi(msg));
 
-		await upsertMessageBulk({ msgs: messages.filter((msg) => msg.t !== 'command'), subscription });
+			await upsertMessageBulk({ msgs: messages.filter((msg) => msg.t !== 'command'), subscription });
 
-		this.emit('loaded-messages');
+			this.emit('loaded-messages');
 
-		if (!room.loaded) {
-			room.loaded = 0;
+			if (!room.loaded) {
+				room.loaded = 0;
+			}
+			room.loaded += messages.length;
+		} catch (error) {
+			// The target may have been deleted since the link was created; no window to build then.
+			if (error instanceof Response && error.status === 404) {
+				return;
+			}
+			dispatchToastMessage({ type: 'error', message: error });
+		} finally {
+			this.updateRoom(message.rid, { isLoading: false });
 		}
-		room.loaded += messages.length;
-
-		this.updateRoom(message.rid, { isLoading: false });
 	}
 }
 
