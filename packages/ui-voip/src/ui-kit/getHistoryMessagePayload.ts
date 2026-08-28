@@ -28,7 +28,7 @@ export const callStateToIcon = (callState: CallHistoryItemState): FrameableIconE
 			return { type: 'icon', icon: 'phone-question-mark', variant: 'warning', framed: true };
 		case 'failed':
 		case 'error':
-		case 'prevented': // A prevented call uses the failed-call icon; the status word carries the distinction.
+		case 'prevented':
 			return { type: 'icon', icon: 'phone-issue', variant: 'danger', framed: true };
 		case 'transferred':
 			return { type: 'icon', icon: 'arrow-forward', variant: 'secondary', framed: true };
@@ -76,7 +76,6 @@ export const getHistoryAction = (callId: string): IconButtonElement => {
 };
 
 const getPreventedReasonElement = (preventedBy: CallPreventionRecord): PlainText => {
-	// The app's reason renders as plain text: an app cannot put a link or formatting into it (spec §2).
 	if ('key' in preventedBy) {
 		return {
 			type: 'plain_text',
@@ -90,50 +89,27 @@ const getPreventedReasonElement = (preventedBy: CallPreventionRecord): PlainText
 	return {
 		type: 'plain_text',
 		i18n: { key: 'Prevented_by_app', args: { appName: preventedBy.appName } },
-		text: `Prevented by ${preventedBy.appName}`,
+		text: `Prevented by app: ${preventedBy.appName}`,
 	};
 };
 
-export const getPreventedCallMessagePayload = (
-	preventedBy: CallPreventionRecord,
-	msg: string = '',
-): Pick<IMessage, 'msg' | 'groupable'> & { blocks: [InfoCardBlock] } => {
-	const icon = callStateToIcon('prevented');
-	const title = callStateToTranslationKey('prevented');
-	const reason = getPreventedReasonElement(preventedBy);
-
-	// A prevented call never existed, so its card carries no action button and no duration (spec §2).
-	return {
-		msg,
-		groupable: false,
-		blocks: [
-			{
-				appId: APP_ID,
-				type: 'info_card',
-				rows: [
-					{
-						background: 'default',
-						elements: [icon, title],
-					},
-					{
-						background: 'secondary',
-						elements: [reason],
-					},
-				],
-			},
-		],
-	};
+export type HistoryMessagePayloadOptions = {
+	state: CallHistoryItemState;
+	duration?: number;
+	callId?: string;
+	msg?: string;
+	preventedBy?: CallPreventionRecord;
 };
 
-export const getHistoryMessagePayload = (
-	callState: CallHistoryItemState,
-	callDuration: number | undefined,
-	callId?: string,
-	msg: string = '',
-): Pick<IMessage, 'msg' | 'groupable'> & { blocks: [InfoCardBlock] } => {
-	const callStateTranslationKey = callStateToTranslationKey(callState);
-	const icon = callStateToIcon(callState);
-	const callDurationFormatted = getFormattedCallDuration(callDuration);
+export const getHistoryMessagePayload = ({
+	state,
+	duration,
+	callId,
+	msg = '',
+	preventedBy,
+}: HistoryMessagePayloadOptions): Pick<IMessage, 'msg' | 'groupable'> & { blocks: [InfoCardBlock] } => {
+	const prevention = state === 'prevented' ? preventedBy : undefined;
+	const secondaryElement = prevention ? getPreventedReasonElement(prevention) : getFormattedCallDuration(duration);
 
 	return {
 		msg,
@@ -145,14 +121,14 @@ export const getHistoryMessagePayload = (
 				rows: [
 					{
 						background: 'default',
-						elements: [icon, callStateTranslationKey],
+						elements: [callStateToIcon(state), callStateToTranslationKey(state)],
 						...(callId && { action: getHistoryAction(callId) }),
 					},
-					...(callDurationFormatted
+					...(secondaryElement
 						? [
 								{
 									background: 'secondary',
-									elements: [callDurationFormatted],
+									elements: [secondaryElement],
 								} as const,
 							]
 						: []),

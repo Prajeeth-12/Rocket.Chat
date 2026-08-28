@@ -19,11 +19,7 @@ import type {
 import { isClientMediaSignal } from '@rocket.chat/media-signaling';
 import type { InsertionModel } from '@rocket.chat/model-typings';
 import { CallHistory, MediaCalls, Rooms, Users } from '@rocket.chat/models';
-import {
-	callStateToTranslationKey,
-	getHistoryMessagePayload,
-	getPreventedCallMessagePayload,
-} from '@rocket.chat/ui-voip/dist/ui-kit/getHistoryMessagePayload';
+import { callStateToTranslationKey, getHistoryMessagePayload } from '@rocket.chat/ui-voip/dist/ui-kit/getHistoryMessagePayload';
 
 import {
 	notifyAppsOfMediaCallEnded,
@@ -315,12 +311,7 @@ export class MediaCallService extends ServiceClassInternal implements IMediaCall
 		const msg = i18nKey ? i18n.t(i18nKey, { lng: this.getLanguageForUser(user.language) }) : '';
 		const duration = this.getCallDuration(call);
 
-		// A prevented call gets its own card, built from the app's snapshotted wording. It has no
-		// action button and no duration (spec §2), so it does not use the generic payload.
-		const record =
-			state === 'prevented' && call.preventedBy
-				? getPreventedCallMessagePayload(call.preventedBy, msg)
-				: getHistoryMessagePayload(state, duration, call._id, msg);
+		const record = getHistoryMessagePayload({ state, duration, callId: call._id, msg, preventedBy: call.preventedBy });
 
 		try {
 			const message = await sendMessage(user, record, room, { skipNotifications });

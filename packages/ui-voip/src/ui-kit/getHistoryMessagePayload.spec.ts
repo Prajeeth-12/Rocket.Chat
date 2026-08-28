@@ -6,7 +6,6 @@ import {
 	getFormattedCallDuration,
 	getHistoryMessagePayload,
 	getHistoryAction,
-	getPreventedCallMessagePayload,
 } from './getHistoryMessagePayload';
 
 const appId = 'media-call-core';
@@ -138,7 +137,7 @@ describe('getHistoryAction', () => {
 
 describe('getHistoryMessagePayload', () => {
 	it('should return correct payload for "ended" state without duration', () => {
-		const result = getHistoryMessagePayload('ended', undefined, 'callid');
+		const result = getHistoryMessagePayload({ state: 'ended', callId: 'callid' });
 		expect(result).toEqual({
 			msg: '',
 			groupable: false,
@@ -162,7 +161,7 @@ describe('getHistoryMessagePayload', () => {
 	});
 
 	it('should return correct payload for "ended" state with duration', () => {
-		const result = getHistoryMessagePayload('ended', 125, 'callid');
+		const result = getHistoryMessagePayload({ state: 'ended', duration: 125, callId: 'callid' });
 		expect(result).toEqual({
 			msg: '',
 			groupable: false,
@@ -190,7 +189,7 @@ describe('getHistoryMessagePayload', () => {
 	});
 
 	it('should return correct payload for "not-answered" state', () => {
-		const result = getHistoryMessagePayload('not-answered', undefined, 'callid', 'call was not answered');
+		const result = getHistoryMessagePayload({ state: 'not-answered', callId: 'callid', msg: 'call was not answered' });
 		expect(result).toEqual({
 			msg: 'call was not answered',
 			groupable: false,
@@ -214,7 +213,7 @@ describe('getHistoryMessagePayload', () => {
 	});
 
 	it('should return correct payload for "failed" state', () => {
-		const result = getHistoryMessagePayload('failed', undefined, 'callid');
+		const result = getHistoryMessagePayload({ state: 'failed', callId: 'callid' });
 		expect(result).toEqual({
 			msg: '',
 			groupable: false,
@@ -238,7 +237,7 @@ describe('getHistoryMessagePayload', () => {
 	});
 
 	it('should return correct payload for "error" state', () => {
-		const result = getHistoryMessagePayload('error', undefined, 'callid');
+		const result = getHistoryMessagePayload({ state: 'error', callId: 'callid' });
 		expect(result).toEqual({
 			msg: '',
 			groupable: false,
@@ -262,7 +261,7 @@ describe('getHistoryMessagePayload', () => {
 	});
 
 	it('should return correct payload for "transferred" state', () => {
-		const result = getHistoryMessagePayload('transferred', undefined, 'callid');
+		const result = getHistoryMessagePayload({ state: 'transferred', callId: 'callid' });
 		expect(result).toEqual({
 			msg: '',
 			groupable: false,
@@ -286,7 +285,7 @@ describe('getHistoryMessagePayload', () => {
 	});
 
 	it('should include duration row when duration is provided', () => {
-		const result = getHistoryMessagePayload('ended', 3665, 'callid');
+		const result = getHistoryMessagePayload({ state: 'ended', duration: 3665, callId: 'callid' });
 
 		expect(result.blocks[0].rows).toHaveLength(2);
 		expect(result.blocks[0].rows[1]).toEqual({
@@ -296,7 +295,7 @@ describe('getHistoryMessagePayload', () => {
 	});
 
 	it('should not include duration row when duration is undefined', () => {
-		const result = getHistoryMessagePayload('ended', undefined, 'callid');
+		const result = getHistoryMessagePayload({ state: 'ended', callId: 'callid' });
 		expect(result.blocks[0].rows).toHaveLength(1);
 	});
 
@@ -305,7 +304,7 @@ describe('getHistoryMessagePayload', () => {
 		const duration = 125;
 
 		states.forEach((state) => {
-			const result = getHistoryMessagePayload(state, duration, 'callid');
+			const result = getHistoryMessagePayload({ state, duration, callId: 'callid' });
 			expect(result.msg).toBe('');
 			expect(result.groupable).toBe(false);
 			expect(result.blocks).toHaveLength(1);
@@ -319,7 +318,7 @@ describe('getHistoryMessagePayload', () => {
 	});
 });
 
-describe('getPreventedCallMessagePayload', () => {
+describe('getHistoryMessagePayload for a prevented call', () => {
 	const titleRow = {
 		background: 'default',
 		elements: [
@@ -328,23 +327,32 @@ describe('getPreventedCallMessagePayload', () => {
 		],
 	};
 
-	it('should carry the message text but never an action or a duration', () => {
+	it('should carry the message text and the action, and show the reason in place of a duration', () => {
 		const preventedBy: CallPreventionRecord = { appId: 'app', appName: 'Call Policy', text: 'the callee is on a DND list' };
-		const result = getPreventedCallMessagePayload(preventedBy, 'Voice call not placed');
+		const result = getHistoryMessagePayload({
+			state: 'prevented',
+			preventedBy,
+			msg: 'Voice call not placed',
+			callId: 'callid',
+			duration: 125,
+		});
 
 		expect(result.groupable).toBe(false);
 		expect(result.msg).toBe('Voice call not placed');
 		expect(result.blocks).toHaveLength(1);
 		expect(result.blocks[0].type).toBe('info_card');
-		// Two rows: the title and the reason - no action button, no duration (spec §2).
+		// Two rows: the title, which opens the panel, and the reason - the duration is dropped (spec §2).
 		expect(result.blocks[0].rows).toHaveLength(2);
-		expect(result.blocks[0].rows[0].action).toBeUndefined();
-		expect(result.blocks[0].rows[1].action).toBeUndefined();
+		expect(result.blocks[0].rows[0].action).toEqual(actionObj);
+		expect(result.blocks[0].rows[1]).toEqual({
+			background: 'secondary',
+			elements: [{ type: 'plain_text', text: 'the callee is on a DND list' }],
+		});
 	});
 
 	it('should render an app literal reason as plain text', () => {
 		const preventedBy: CallPreventionRecord = { appId: 'app', appName: 'Call Policy', text: 'the callee is on a DND list' };
-		const result = getPreventedCallMessagePayload(preventedBy);
+		const result = getHistoryMessagePayload({ state: 'prevented', preventedBy });
 
 		expect(result.blocks[0].rows).toEqual([
 			titleRow,
@@ -364,7 +372,7 @@ describe('getPreventedCallMessagePayload', () => {
 			ns: 'app-app',
 			args: { callee: 'user2' },
 		};
-		const result = getPreventedCallMessagePayload(preventedBy);
+		const result = getHistoryMessagePayload({ state: 'prevented', preventedBy });
 
 		expect(result.blocks[0].rows[1]).toEqual({
 			background: 'secondary',
@@ -378,9 +386,15 @@ describe('getPreventedCallMessagePayload', () => {
 		});
 	});
 
+	it('should fall back to the generic card when the state is prevented but no record was kept', () => {
+		const result = getHistoryMessagePayload({ state: 'prevented', callId: 'callid' });
+
+		expect(result.blocks[0].rows).toEqual([{ ...titleRow, action: actionObj }]);
+	});
+
 	it('should fall back to "Prevented by {app name}" for a malformed record', () => {
 		const preventedBy = { appId: 'app', appName: 'Call Policy', text: '' } as CallPreventionRecord;
-		const result = getPreventedCallMessagePayload(preventedBy);
+		const result = getHistoryMessagePayload({ state: 'prevented', preventedBy });
 
 		expect(result.blocks[0].rows[1]).toEqual({
 			background: 'secondary',
@@ -388,7 +402,7 @@ describe('getPreventedCallMessagePayload', () => {
 				{
 					type: 'plain_text',
 					i18n: { key: 'Prevented_by_app', args: { appName: 'Call Policy' } },
-					text: 'Prevented by Call Policy',
+					text: 'Prevented by app: Call Policy',
 				},
 			],
 		});

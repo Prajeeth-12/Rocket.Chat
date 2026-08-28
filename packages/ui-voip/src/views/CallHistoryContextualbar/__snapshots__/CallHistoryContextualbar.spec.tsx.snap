@@ -218,7 +218,11 @@ exports[`renders Default without crashing 1`] = `
                     <div
                       class="rcx-box rcx-box--full rcx-css-m8ijko"
                     >
-                      Friday, February 7, 2025 at 12:00:00 PM
+                      <div
+                        class="rcx-box rcx-box--full rcx-css-1po16l8"
+                      >
+                        Friday, February 7, 2025 at 12:00:00 PM
+                      </div>
                     </div>
                   </div>
                   <div
@@ -551,7 +555,11 @@ exports[`renders ExternalContact without crashing 1`] = `
                     <div
                       class="rcx-box rcx-box--full rcx-css-m8ijko"
                     >
-                      Friday, February 7, 2025 at 12:00:00 PM
+                      <div
+                        class="rcx-box rcx-box--full rcx-css-1po16l8"
+                      >
+                        Friday, February 7, 2025 at 12:00:00 PM
+                      </div>
                     </div>
                   </div>
                   <div
@@ -872,14 +880,18 @@ exports[`renders PreventedWithReason without crashing 1`] = `
                       </div>
                     </div>
                     <div
-                      class="rcx-box rcx-box--full rcx-css-az37y0"
-                    >
-                      Prevented by Call Policy
-                    </div>
-                    <div
                       class="rcx-box rcx-box--full rcx-css-m8ijko"
                     >
-                      Friday, February 7, 2025 at 12:00:00 PM
+                      <div
+                        class="rcx-box rcx-box--full rcx-css-1po16l8"
+                      >
+                        Prevented by app: Call Policy
+                      </div>
+                      <div
+                        class="rcx-box rcx-box--full rcx-css-1po16l8"
+                      >
+                        Friday, February 7, 2025 at 12:00:00 PM
+                      </div>
                     </div>
                   </div>
                   <div
@@ -1230,14 +1242,18 @@ exports[`renders PreventedWithTranslatedReason without crashing 1`] = `
                       </div>
                     </div>
                     <div
-                      class="rcx-box rcx-box--full rcx-css-az37y0"
-                    >
-                      Prevented by Call Policy
-                    </div>
-                    <div
                       class="rcx-box rcx-box--full rcx-css-m8ijko"
                     >
-                      Friday, February 7, 2025 at 12:00:00 PM
+                      <div
+                        class="rcx-box rcx-box--full rcx-css-1po16l8"
+                      >
+                        Prevented by app: Call Policy
+                      </div>
+                      <div
+                        class="rcx-box rcx-box--full rcx-css-1po16l8"
+                      >
+                        Friday, February 7, 2025 at 12:00:00 PM
+                      </div>
                     </div>
                   </div>
                   <div
@@ -1581,7 +1597,7 @@ exports[`renders PreventedWithoutReason without crashing 1`] = `
                             <div
                               class="rcx-box rcx-box--full rcx-css-1eogw2f"
                             >
-                              Prevented by Call Policy
+                              Prevented by app: Call Policy
                             </div>
                           </div>
                         </div>
@@ -1590,7 +1606,11 @@ exports[`renders PreventedWithoutReason without crashing 1`] = `
                     <div
                       class="rcx-box rcx-box--full rcx-css-m8ijko"
                     >
-                      Friday, February 7, 2025 at 12:00:00 PM
+                      <div
+                        class="rcx-box rcx-box--full rcx-css-1po16l8"
+                      >
+                        Friday, February 7, 2025 at 12:00:00 PM
+                      </div>
                     </div>
                   </div>
                   <div

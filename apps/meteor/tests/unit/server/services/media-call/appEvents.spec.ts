@@ -31,7 +31,7 @@ const settingsMock = { get: sinon.stub().returns('en') };
  */
 const i18nMock = {
 	t: (key: string, options: { defaultValue?: string; replace?: Record<string, string | number> }) => {
-		const wording = key === 'Prevented_by_app' ? 'Prevented by {{appName}}' : (options.defaultValue ?? key);
+		const wording = key === 'Prevented_by_app' ? 'Prevented by app: {{appName}}' : (options.defaultValue ?? key);
 
 		return wording.replace(/\{\{(\w+)\}\}/g, (match: string, name: string) => String(options.replace?.[name] ?? match));
 	},
@@ -506,7 +506,7 @@ describe('media call app events', () => {
 			const result = await runPreMediaCallCreatedAppHook(hookParams());
 
 			// A raw key must never be what a reader is left with
-			expect(result.preventedBy.text).to.equal('Prevented by Blocking App');
+			expect(result.preventedBy.text).to.equal('Prevented by app: Blocking App');
 			expect(loggerMock.warn.callCount).to.equal(1);
 		});
 

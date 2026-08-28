@@ -16,7 +16,7 @@ const meta = {
 				Call: 'Call',
 				Call_ended_bold: '*Voice call ended*',
 				Voice_call_not_placed: 'Voice call not placed',
-				Prevented_by_app: 'Prevented by {{appName}}',
+				Prevented_by_app: 'Prevented by app: {{appName}}',
 				Incoming_voice_call: 'Incoming voice call',
 				Outgoing_voice_call: 'Outgoing voice call',
 				Duration: 'Duration',
