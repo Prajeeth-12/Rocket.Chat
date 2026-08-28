@@ -28,6 +28,9 @@ type Mode = 'pass' | 'prevent' | 'prevent-i18n' | 'drop-screen-share';
 const APP_PREVENTION_KEY = 'call_prevented_for_callee';
 const APP_PREVENTION_WORDING = 'Calls to user2 are not allowed by this workspace';
 
+/** The literal words the fixture app writes in plain `prevent` mode (no key). */
+const APP_PREVENTION_REASON = 'blocked by media-call-events-test';
+
 /** The prevention record of an app that named a key rather than writing the words itself. */
 type I18nPreventionRecord = Extract<CallPreventionRecord, { key: string }>;
 
@@ -324,41 +327,35 @@ test.describe('Apps > Media call events', () => {
 			});
 
 			// Nobody's device rang, but the attempt got as far as routing, so the workspace writes it
-			// down like any other call that ended.
+			// down for the caller. A prevented internal call leaves a caller-only entry (spec §3).
 			const callerItem = await waitForNewCallHistoryItem(
 				userApis.user1,
 				{ direction: 'outbound', filter: 'user2' },
 				previousCallerItem?._id,
 			);
-			const calleeItem = await waitForNewCallHistoryItem(
-				userApis.user2,
-				{ direction: 'inbound', filter: 'user1' },
-				previousCalleeItem?._id,
-			);
 
-			await test.step('both users keep a record of the call that never happened', async () => {
-				// The two sides read the same attempt, from their own end of it
-				expect(calleeItem.callId).toBe(callerItem.callId);
+			await test.step('only the caller keeps a record of the call that never happened', async () => {
 				expect(callerItem.contactUsername).toBe('user2');
-				expect(calleeItem.contactUsername).toBe('user1');
+				expect(callerItem.external).toBe(false);
+				// The call was never accepted and never activated, so there is nothing to time
+				expect(callerItem.duration).toBe(0);
+				// An app refused the call before it existed; that state wins over every other one
+				expect(callerItem.state).toBe('prevented');
 
-				for (const item of [callerItem, calleeItem]) {
-					expect(item.external).toBe(false);
-					// The call was never accepted and never activated, so there is nothing to time
-					expect(item.duration).toBe(0);
-					// A prevented call carries no hangup reason and no `acceptedAt`, so it lands in the
-					// same state a call nobody picked up does. Nothing reads `preventedBy` yet, so this
-					// is all a user is told - see the message below.
-					expect(item.state).toBe('not-answered');
-				}
+				// The callee's device never rang and they were never told, so nothing new appears in
+				// their history - it stays exactly where it was before the call (spec §3).
+				const calleeNewest = await getNewestCallHistoryItem(userApis.user2, { direction: 'inbound', filter: 'user1' });
+				expect(calleeNewest?._id).toBe(previousCalleeItem?._id);
 			});
 
-			await test.step('the record posts a message into the DM', async () => {
+			await test.step('the record posts the prevented card into the DM', async () => {
 				// Read by the id the history item names, so it is the message that record posted and not
-				// one an earlier call left in this DM. It reads as a missed call, for the reason above.
+				// one an earlier call left in this DM.
 				const message = user1.poHomeChannel.content.messageById(callerItem.messageId);
 
-				await expect(message).toContainText('Voice call not answered');
+				// The card title is the workspace's sentence; the second line carries the app's own words.
+				await expect(message).toContainText('Voice call not placed');
+				await expect(message).toContainText(APP_PREVENTION_REASON);
 			});
 		});
 

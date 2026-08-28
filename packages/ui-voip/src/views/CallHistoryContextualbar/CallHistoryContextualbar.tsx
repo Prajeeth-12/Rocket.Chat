@@ -1,3 +1,4 @@
+import type { CallPreventionRecord } from '@rocket.chat/core-typings';
 import { Box, Button, ButtonGroup, Icon, MessageBlock } from '@rocket.chat/fuselage';
 import { UiKitComponent, UiKitMessage as UiKitMessageSurfaceRender, UiKitContext } from '@rocket.chat/fuselage-ui-kit';
 import {
@@ -20,7 +21,14 @@ import { useFullStartDate } from './useFullStartDate';
 import CallHistoryUser from '../../components/CallHistoryUser';
 import { usePeekMediaSessionState } from '../../context/usePeekMediaSessionState';
 import { isCallHistoryInternalContact, type CallHistoryContact } from '../../definitions';
-import { getHistoryMessagePayload } from '../../ui-kit/getHistoryMessagePayload';
+import { getHistoryMessagePayload, getPreventedCallMessagePayload } from '../../ui-kit/getHistoryMessagePayload';
+
+/**
+ * The panel adds "Prevented by {app name}" below the card, except when the card's own second line
+ * already reads that - a malformed record that carries neither a reason nor a key - so it is not
+ */
+export const shouldDisplayPreventedByBox = (preventedBy: CallPreventionRecord | undefined): preventedBy is CallPreventionRecord =>
+	typeof preventedBy !== 'undefined' && ('key' in preventedBy || Boolean(preventedBy.text));
 
 export type CallHistoryData = {
 	callId: string;
@@ -28,6 +36,7 @@ export type CallHistoryData = {
 	duration: number;
 	startedAt: Date;
 	state: 'ended' | 'not-answered' | 'failed' | 'error' | 'transferred' | 'prevented';
+	preventedBy?: CallPreventionRecord;
 	messageId?: string;
 };
 
@@ -73,9 +82,19 @@ const CallHistoryContextualBar = ({ onClose, actions, contact, data }: CallHisto
 					<InfoPanelSection>
 						<MessageBlock fixedWidth>
 							<UiKitContext.Provider value={contextValue}>
-								<UiKitComponent render={UiKitMessageSurfaceRender} blocks={getHistoryMessagePayload(data.state, duration).blocks} />
+								<UiKitComponent
+									render={UiKitMessageSurfaceRender}
+									blocks={
+										data.preventedBy
+											? getPreventedCallMessagePayload(data.preventedBy).blocks
+											: getHistoryMessagePayload(data.state, duration).blocks
+									}
+								/>
 							</UiKitContext.Provider>
 						</MessageBlock>
+						{shouldDisplayPreventedByBox(data.preventedBy) && (
+							<Box color='hint'>{t('Prevented_by_app', { appName: data.preventedBy.appName })}</Box>
+						)}
 						<Box marginBlockStart={-8}>{date}</Box>
 					</InfoPanelSection>
 					<InfoPanelSection>

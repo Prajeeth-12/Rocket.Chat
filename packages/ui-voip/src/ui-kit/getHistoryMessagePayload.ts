@@ -1,5 +1,5 @@
-import type { CallHistoryItemState, IMessage } from '@rocket.chat/core-typings';
-import type { IconButtonElement, FrameableIconElement, InfoCardBlock, TextObject } from '@rocket.chat/ui-kit';
+import type { CallHistoryItemState, CallPreventionRecord, IMessage } from '@rocket.chat/core-typings';
+import type { IconButtonElement, FrameableIconElement, InfoCardBlock, PlainText, TextObject } from '@rocket.chat/ui-kit';
 import { intervalToDuration, secondsToMilliseconds } from 'date-fns';
 
 const APP_ID = 'media-call-core';
@@ -10,9 +10,10 @@ export const callStateToTranslationKey = (callState: CallHistoryItemState): Text
 			return { type: 'mrkdwn', i18n: { key: 'Call_ended_bold' }, text: 'Call ended' };
 		case 'not-answered':
 			return { type: 'mrkdwn', i18n: { key: 'Call_not_answered_bold' }, text: 'Call not answered' };
+		case 'prevented':
+			return { type: 'mrkdwn', i18n: { key: 'Voice_call_not_placed' }, text: 'Voice call not placed' };
 		case 'failed':
 		case 'error':
-		case 'prevented': // Stage 4 replaces this with the dedicated prevented card (title "Voice call not placed").
 			return { type: 'mrkdwn', i18n: { key: 'Call_failed_bold' }, text: 'Call failed' };
 		case 'transferred':
 			return { type: 'mrkdwn', i18n: { key: 'Call_transferred_bold' }, text: 'Call transferred' };
@@ -71,6 +72,56 @@ export const getHistoryAction = (callId: string): IconButtonElement => {
 		actionId: 'open-history',
 		appId: APP_ID,
 		blockId: callId,
+	};
+};
+
+const getPreventedReasonElement = (preventedBy: CallPreventionRecord): PlainText => {
+	// The app's reason renders as plain text: an app cannot put a link or formatting into it (spec §2).
+	if ('key' in preventedBy) {
+		return {
+			type: 'plain_text',
+			i18n: { key: preventedBy.key, ns: preventedBy.ns, args: preventedBy.args },
+			text: preventedBy.text,
+		};
+	}
+	if (preventedBy.text) {
+		return { type: 'plain_text', text: preventedBy.text };
+	}
+	return {
+		type: 'plain_text',
+		i18n: { key: 'Prevented_by_app', args: { appName: preventedBy.appName } },
+		text: `Prevented by ${preventedBy.appName}`,
+	};
+};
+
+export const getPreventedCallMessagePayload = (
+	preventedBy: CallPreventionRecord,
+	msg: string = '',
+): Pick<IMessage, 'msg' | 'groupable'> & { blocks: [InfoCardBlock] } => {
+	const icon = callStateToIcon('prevented');
+	const title = callStateToTranslationKey('prevented');
+	const reason = getPreventedReasonElement(preventedBy);
+
+	// A prevented call never existed, so its card carries no action button and no duration (spec §2).
+	return {
+		msg,
+		groupable: false,
+		blocks: [
+			{
+				appId: APP_ID,
+				type: 'info_card',
+				rows: [
+					{
+						background: 'default',
+						elements: [icon, title],
+					},
+					{
+						background: 'secondary',
+						elements: [reason],
+					},
+				],
+			},
+		],
 	};
 };
 

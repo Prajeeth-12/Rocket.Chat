@@ -1,9 +1,12 @@
+import type { CallPreventionRecord } from '@rocket.chat/core-typings';
+
 import {
 	callStateToTranslationKey,
 	callStateToIcon,
 	getFormattedCallDuration,
 	getHistoryMessagePayload,
 	getHistoryAction,
+	getPreventedCallMessagePayload,
 } from './getHistoryMessagePayload';
 
 const appId = 'media-call-core';
@@ -32,6 +35,11 @@ describe('callStateToTranslationKey', () => {
 		const result = callStateToTranslationKey('transferred');
 		expect(result).toEqual({ type: 'mrkdwn', i18n: { key: 'Call_transferred_bold' }, text: 'Call transferred' });
 	});
+
+	it('should return the dedicated title for "prevented" state', () => {
+		const result = callStateToTranslationKey('prevented');
+		expect(result).toEqual({ type: 'mrkdwn', i18n: { key: 'Voice_call_not_placed' }, text: 'Voice call not placed' });
+	});
 });
 
 describe('callStateToIcon', () => {
@@ -58,6 +66,11 @@ describe('callStateToIcon', () => {
 	it('should return correct icon for "transferred" state', () => {
 		const result = callStateToIcon('transferred');
 		expect(result).toEqual({ type: 'icon', icon: 'arrow-forward', variant: 'secondary', framed: true });
+	});
+
+	it('should reuse the failed-call icon for "prevented" state', () => {
+		const result = callStateToIcon('prevented');
+		expect(result).toEqual({ type: 'icon', icon: 'phone-issue', variant: 'danger', framed: true });
 	});
 });
 
@@ -302,6 +315,82 @@ describe('getHistoryMessagePayload', () => {
 			expect(result.blocks[0].rows[1].elements[0].type).toBe('mrkdwn');
 			expect(result.blocks[0].rows[0].action).toEqual(actionObj);
 			expect(result.blocks[0].rows[1].action).toBeUndefined();
+		});
+	});
+});
+
+describe('getPreventedCallMessagePayload', () => {
+	const titleRow = {
+		background: 'default',
+		elements: [
+			{ type: 'icon', icon: 'phone-issue', variant: 'danger', framed: true },
+			{ type: 'mrkdwn', i18n: { key: 'Voice_call_not_placed' }, text: 'Voice call not placed' },
+		],
+	};
+
+	it('should carry the message text but never an action or a duration', () => {
+		const preventedBy: CallPreventionRecord = { appId: 'app', appName: 'Call Policy', text: 'the callee is on a DND list' };
+		const result = getPreventedCallMessagePayload(preventedBy, 'Voice call not placed');
+
+		expect(result.groupable).toBe(false);
+		expect(result.msg).toBe('Voice call not placed');
+		expect(result.blocks).toHaveLength(1);
+		expect(result.blocks[0].type).toBe('info_card');
+		// Two rows: the title and the reason - no action button, no duration (spec §2).
+		expect(result.blocks[0].rows).toHaveLength(2);
+		expect(result.blocks[0].rows[0].action).toBeUndefined();
+		expect(result.blocks[0].rows[1].action).toBeUndefined();
+	});
+
+	it('should render an app literal reason as plain text', () => {
+		const preventedBy: CallPreventionRecord = { appId: 'app', appName: 'Call Policy', text: 'the callee is on a DND list' };
+		const result = getPreventedCallMessagePayload(preventedBy);
+
+		expect(result.blocks[0].rows).toEqual([
+			titleRow,
+			{
+				background: 'secondary',
+				elements: [{ type: 'plain_text', text: 'the callee is on a DND list' }],
+			},
+		]);
+	});
+
+	it('should render an app i18n reason in the app namespace with the snapshot as a fallback', () => {
+		const preventedBy: CallPreventionRecord = {
+			appId: 'app',
+			appName: 'Call Policy',
+			text: 'Calls to user2 are not allowed by this workspace',
+			key: 'call_prevented_for_callee',
+			ns: 'app-app',
+			args: { callee: 'user2' },
+		};
+		const result = getPreventedCallMessagePayload(preventedBy);
+
+		expect(result.blocks[0].rows[1]).toEqual({
+			background: 'secondary',
+			elements: [
+				{
+					type: 'plain_text',
+					i18n: { key: 'call_prevented_for_callee', ns: 'app-app', args: { callee: 'user2' } },
+					text: 'Calls to user2 are not allowed by this workspace',
+				},
+			],
+		});
+	});
+
+	it('should fall back to "Prevented by {app name}" for a malformed record', () => {
+		const preventedBy = { appId: 'app', appName: 'Call Policy', text: '' } as CallPreventionRecord;
+		const result = getPreventedCallMessagePayload(preventedBy);
+
+		expect(result.blocks[0].rows[1]).toEqual({
+			background: 'secondary',
+			elements: [
+				{
+					type: 'plain_text',
+					i18n: { key: 'Prevented_by_app', args: { appName: 'Call Policy' } },
+					text: 'Prevented by Call Policy',
+				},
+			],
 		});
 	});
 });

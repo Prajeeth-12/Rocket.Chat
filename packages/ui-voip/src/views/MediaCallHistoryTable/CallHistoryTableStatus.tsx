@@ -16,9 +16,10 @@ const getCallStateText = (status: CallHistoryItemState, t: TFunction) => {
 			return t('Ended');
 		case 'not-answered':
 			return t('Not_answered');
+		case 'prevented':
+			return t('Prevented');
 		case 'failed':
 		case 'error':
-		case 'prevented': // Stage 4 gives this its own word ("Prevented") and its own filter.
 			return t('Failed');
 		case 'transferred':
 			return t('Transferred');
