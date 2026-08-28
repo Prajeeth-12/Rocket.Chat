@@ -1,6 +1,7 @@
 import { renderHook } from '@testing-library/react';
 
 import { useCallSounds } from './useCallSounds';
+import type { State } from '../context/definitions';
 
 const mockPlayCallEnded = jest.fn();
 const mockPlayDialer = jest.fn();
@@ -39,12 +40,12 @@ describe('useCallSounds', () => {
 
 	it('plays the dialer while calling and the ringer while ringing', () => {
 		const { rerender } = renderHook(({ state }) => useCallSounds(state, () => () => undefined), {
-			initialProps: { state: 'calling' as const },
+			initialProps: { state: 'calling' as State },
 		});
 		expect(mockPlayDialer).toHaveBeenCalledTimes(1);
 		expect(mockPlayRinger).not.toHaveBeenCalled();
 
-		rerender({ state: 'ringing' as const });
+		rerender({ state: 'ringing' });
 		expect(mockPlayRinger).toHaveBeenCalledTimes(1);
 	});
 });
