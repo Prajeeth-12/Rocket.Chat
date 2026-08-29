@@ -69,11 +69,18 @@ const { VideoConfService } = proxyquire.noCallThru().load('../../../../../server
 		},
 	},
 	'../../lib/messaging/threads/functions': { follow: followStub },
-	// Persistent chat fully on, in thread mode: what proves the *provider* gate below is the gate that held.
+	// Persistent chat fully on, in thread mode, with the window that gives thread mode its meaning: what proves
+	// the *provider* gate below is the gate that held.
 	'../../settings': {
 		settings: {
 			get: (key: string) =>
-				(({ VideoConf_Enable_Persistent_Chat: true, VideoConf_Persistent_Chat_Mode: 'thread' }) as Record<string, unknown>)[key],
+				(
+					({
+						VideoConf_Enable_Persistent_Chat: true,
+						VideoConf_Conference_Window_Enabled: true,
+						VideoConf_Persistent_Chat_Mode: 'thread',
+					}) as Record<string, unknown>
+				)[key],
 		},
 	},
 });
